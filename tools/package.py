@@ -31,6 +31,8 @@ def build(root=ROOT, out=None, expected=None):
     for name in ['enabled.txt', 'README.md']:
         entries[f'{MODULE}/{name}'] = root / name
     if MODULE == 'QuickslotsForever':
+        entries[f'{MODULE}/README.txt'] = root / 'README.txt'
+        entries[f'{MODULE}/docs/DEVELOPMENT.md'] = root / 'docs/DEVELOPMENT.md'
         entries[f'{MODULE}/mod_settings.ini'] = root / 'mod_settings.ini'
         entries[f'{MODULE}/config.example.ini'] = root / 'distribution/config.ini'
         entries['tools/Migrate-ShowBothWheels.ps1'] = root / 'tools/Migrate-ShowBothWheels.ps1'
