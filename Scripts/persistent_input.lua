@@ -3,6 +3,15 @@
 return function(e)
   local api={actions={},contexts={},target=nil,sub=nil,inventorySub=nil}
   local options={bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=false,bNotifyUserSettings=false}
+  local journal=e.load_inventory and e.load_inventory()
+  if journal and journal~='' then
+    local overlay,priority,sub,context=journal:match('^([^\t]+)\t([%-0-9]+)\t([^\t]+)\t([^\t]+)$')
+    if overlay then
+      api.overlayPath=overlay;api.overlayPriority=tonumber(priority)
+      api.inventorySub=e.resolve(sub)
+      local c=e.resolve(context);if e.valid(c) then api.contexts.inventory=c end
+    end
+  end
   local function objects()
     if not api.contexts.gameplay then api.contexts.gameplay=e.retain('InputMappingContext','IMC_QuickslotsForever') end
     for _,group in ipairs({'Ability','Consumable'}) do for slot=1,4 do
@@ -80,7 +89,7 @@ return function(e)
     self.inventoryReady=true
     return true
   end
-  function api:OpenInventory(overlay,sub)
+  function api:AttachInventory(overlay,sub)
     if not self:PrepareInventory() then return false end
     local context=self.contexts.inventory
     if e.valid(overlay.InputMapping) and not e.same(overlay.InputMapping,context) then
@@ -92,18 +101,34 @@ return function(e)
       self.overlayPath=e.path(overlay)
       self.overlayPriority=overlay.InputMappingPriority
     end
+    if e.same(overlay.InputMapping,context) and overlay.InputMappingPriority==10002
+        and e.same(self.inventorySub,sub) then return true end
+    if e.save_inventory then
+      e.save_inventory(table.concat({self.overlayPath,self.overlayPriority,e.path(sub),e.path(context)},'\t'))
+    end
     -- CommonUI also removes this context on native deactivation/destruction.
     overlay.InputMapping=context;overlay.InputMappingPriority=10002
     self.inventorySub=sub
+    return true
+  end
+  function api:OpenInventory(overlay,sub)
+    if not self:AttachInventory(overlay,sub) then return false end
+    local context=self.contexts.inventory
     if not e.present(context) then
       sub:AddMappingContext(context,10002,{bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false})
     end
     return true
   end
-  function api:CloseInventory()
-    if e.valid(self.inventorySub) and self.contexts.inventory then
+  function api:DeactivateInventory()
+    if e.valid(self.inventorySub) and self.contexts.inventory
+        and (not e.present or e.present(self.contexts.inventory)) then
       self.inventorySub:RemoveMappingContext(self.contexts.inventory,options)
     end
+    -- Leave InputMapping attached: CommonUI must activate it on the next S open
+    -- even when native C++ bypasses the reflected ActivateWidget hook.
+  end
+  function api:CloseInventory()
+    self:DeactivateInventory()
     self.inventorySub=nil
     local overlay=self.overlayPath and e.resolve(self.overlayPath)
     if e.valid(overlay) and e.same(overlay.InputMapping,self.contexts.inventory) then
@@ -111,6 +136,7 @@ return function(e)
       overlay.InputMappingPriority=self.overlayPriority
     end
     self.overlayPath=nil;self.overlayPriority=nil
+    if e.save_inventory then e.save_inventory('') end
   end
   return api
 end

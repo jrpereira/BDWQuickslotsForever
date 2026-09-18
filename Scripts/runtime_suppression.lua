@@ -1,11 +1,29 @@
 -- Context fields only; saved player keys and action objects are never modified.
 return function(e)
   local originals={}
+  local pendingRebuild={}
+  local checked={}
   local api={}
   -- Shared scalar journal survives Lua reload; never share UObject wrappers.
   for line in (e.load() or ''):gmatch('[^\n]+') do
     local p,i,a,k,b=line:match('^([^\t]+)\t(%d+)\t([^\t]+)\t([^\t]+)\t(%d+)$')
     if p then originals[p..'\t'..i]={context=p,index=tonumber(i),action=a,key=k,behavior=tonumber(b)} end
+  end
+  if e.resolve then
+    for _,r in pairs(originals) do
+      local c=e.resolve(r.context)
+      if e.valid(c) then pendingRebuild[r.context]=c end
+    end
+  end
+  function api:Invalidate(context)
+    if context then checked[e.path(context)]=nil else checked={} end
+  end
+  function api:RetryRebuilds()
+    for path,context in pairs(pendingRebuild) do
+      if e.valid(context) then assert(e.rebuild(context)~=false,'Suppression rebuild rejected') end
+      pendingRebuild[path]=nil
+    end
+    return true
   end
   local function save()
     local lines={}
@@ -14,7 +32,7 @@ return function(e)
   end
   function api:Apply(contexts)
     for _,c in ipairs(contexts) do
-      if e.valid(c) and not e.owned(c) then
+      if e.valid(c) and not e.owned(c) and not e.valid(checked[e.path(c)]) then
         local changed=false
         e.each(c.Mappings,function(i,m)
           if e.target(m.Action) and not (e.key(m)=='None' and m.SettingBehavior==2) then
@@ -23,15 +41,19 @@ return function(e)
               originals[id]={context=e.path(c),index=i,action=e.path(m.Action),key=e.key(m),behavior=m.SettingBehavior}
               save() -- journal before mutation
             end
+            pendingRebuild[e.path(c)]=c
             m.SettingBehavior=2;m.Key={KeyName=e.name('None')};changed=true
           end
         end)
-        if changed then e.rebuild(c) end
+        local path=e.path(c)
+        if changed then pendingRebuild[path]=c end
+        checked[path]=c
       end
     end
-    return true
+    return self:RetryRebuilds()
   end
   function api:Restore()
+    checked={}
     local changed={}
     local restored={}
     for id,r in pairs(originals) do
@@ -52,8 +74,9 @@ return function(e)
       end
       restored[#restored+1]=id
     end
-    for _,c in pairs(changed) do e.rebuild(c) end
+    for _,c in pairs(changed) do assert(e.rebuild(c)~=false,'Restoration rebuild rejected') end
     for _,id in ipairs(restored) do originals[id]=nil end
+    pendingRebuild={}
     save()
     return true
   end

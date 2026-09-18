@@ -2,6 +2,16 @@
 return function(e)
   local originals={}
   local api={}
+  for line in ((e.load and e.load()) or ''):gmatch('[^\n]+') do
+    local path,original,assigned=line:match('^([^\t]+)\t([^\t]*)\t([^\t]+)$')
+    if path then originals[path]={original=original~='' and original or nil,assigned=assigned} end
+  end
+  local function save()
+    if not e.save then return end
+    local lines={}
+    for p,r in pairs(originals) do lines[#lines+1]=p..'\t'..(r.original or '')..'\t'..r.assigned end
+    table.sort(lines);e.save(table.concat(lines,'\n'))
+  end
   function api:Set(widget,action)
     if not e.valid(widget) or not e.valid(action) then return false end
     if e.same(widget.EnhancedInputAction,action) then return true end
@@ -9,6 +19,7 @@ return function(e)
     if not originals[path] then
       originals[path]={original=e.path(widget.EnhancedInputAction),assigned=e.path(action)}
     else originals[path].assigned=e.path(action) end
+    save()
     widget:SetEnhancedInputAction(action)
     return true
   end
@@ -21,8 +32,15 @@ return function(e)
         end
         originals[path]=nil
       end
+      save()
     end)
   end
-  function api:Forget() originals={} end
+  function api:Forget() originals={};save() end
+  function api:Prune()
+    for path in pairs(originals) do
+      if not e.valid(e.resolve(path)) then originals[path]=nil end
+    end
+    save()
+  end
   return api
 end

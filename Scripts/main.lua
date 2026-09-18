@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.44-native.1
+-- QuickslotsForever v0.3.53-native.1
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.44-native.1"
+local VERSION="0.3.53-native.1"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -79,17 +79,20 @@ local function load_config(text)
   return c
 end
 local LastConfigText=readall(CONFIG_PATH) or InitialText
+local PendingConfigBaseline
 local Config=load_config(LastConfigText)
 local Enhanced
 local PersistentInput
 local Suppression
 local sync_inventory_context
+local InventoryNavigation
+local ShortcutTargets
+local RequestSuppressionSnapshot
 local RecoveryWork
 local reset_world_visuals
 local function request_recovery()
   if not RecoveryWork then return end
-  if Config.Enabled~=0 then RecoveryWork:Request('input'); RecoveryWork:Request('hud') end
-  if Config.RemoveDefinedActionBindings~=0 then RecoveryWork:Request('cleanup') end
+  if Config.Enabled~=0 then RecoveryWork:Request('input') end
 end
 
 -- Gameplay input classification remains owned by Unreal Enhanced Input.
@@ -98,12 +101,7 @@ local function get_live(class,predicate)
   for _,o in ipairs(objs) do if valid(o) and not fullname(o):find("Default__",1,true) and (not predicate or predicate(o)) then return o end end
 end
 local function ability_button(slot)
-  local ok,objs=pcall(function() return FindAllOf("WBP_AA_Quickslots_Button_C") end); if not ok or not objs then return nil end
-  local fallback
-  for _,o in ipairs(objs) do if valid(o) and tonumber(safe(o,"TargetQuickslot"))==slot-1 and not fullname(o):find("Default__",1,true) then
-    local aw=safe(o,"AbilityWidget"); if valid(aw) and fullname(o):find("/Engine/Transient.",1,true) then return o end; if valid(aw) and not fallback then fallback=o end
-  end end
-  return fallback
+  return ShortcutTargets and ShortcutTargets:Get('Ability',slot)
 end
 local function trigger_ability(slot)
   local b=ability_button(slot)
@@ -113,11 +111,8 @@ local function trigger_ability(slot)
   if not ok then return false,"BP_OnClicked failed for "..target..": "..tostring(e) end
   return true,"BP_OnClicked on "..target
 end
-local function consumable_widget() return get_live("WBP_HUD_Quickslots_C",function(o) return valid(safe(o,"Left")) end) end
-local function bind_overlay() return get_live("WBP_Inventory_QuickslotBindOverlay_C",function(o) local ok,v=pcall(function() return o:IsActivated() end); return ok and v==true end) end
 local function trigger_consumable(slot)
-  local w=consumable_widget()
-  local b=valid(w) and safe(w,SLOT_WIDGET[slot]) or nil
+  local b=ShortcutTargets and ShortcutTargets:Get('Consumable',slot)
   if not valid(b) then return false,"no live consumable button for slot "..slot end
   local target=fullname(b)
   local ok,e=pcall(function() b:BP_OnClicked() end)
@@ -127,8 +122,7 @@ end
 local function native_action(path)
   local ok,o=pcall(function() return StaticFindObject(path) end); return ok and valid(o) and o or nil
 end
-local function game_hud() return get_live("WBP_GameHUD_C",function(o) return valid(safe(o,"QuickslotsSwitcher")) end) end
-local refresh_hud_visuals
+local function game_hud() return get_live("WBP_GameHUD_C",function(o) return valid(safe(o,"QuickslotsSwitcher")) and fullname(o):find("/Engine/Transient",1,true)~=nil end) end
 
 local function unwrap(v)
   if v==nil then return nil end
@@ -146,6 +140,12 @@ local function each_container(c,fn)
   local ok=pcall(function() c:ForEach(function(k,v) fn(k,v) end) end)
   return ok
 end
+ShortcutTargets=dofile(scripts..'/shortcut_targets.lua')({
+  valid=valid,live=function(o) return fullname(o):find('/Engine/Transient',1,true)~=nil end,
+  discover=game_hud,
+  wheel=function(h,group) return safe(h,group=='Ability' and 'WBP_AA_Quickslots' or 'WBP_HUD_Quickslots') end,
+  button=function(w,slot) return safe(w,SLOT_WIDGET[slot]) end,
+})
 -- Explicit native-action suppression allowlist. Do not infer unverified aliases.
 local SuppressionTargets={
   {action="IA_Quickslot_Left",row="player_quickslot_left"},
@@ -170,15 +170,31 @@ local function mapping_name_is_defined_here(n)
   end
   return false
 end
+local SuppressionNeedsSnapshot=true
+local SuppressionDirty={}
+RequestSuppressionSnapshot=function(invalidate)
+  SuppressionNeedsSnapshot=true
+  if invalidate and Suppression then Suppression:Invalidate() end
+  if RecoveryWork then RecoveryWork:Request('cleanup') end
+end
 local function remove_native_conflicts()
   if not Suppression then return false end
-  if Config.Enabled==0 or Config.RemoveDefinedActionBindings==0 then return Suppression:Restore() end
-  if not Enhanced or not valid(Enhanced.playerInput) then return false end
+  if Config.Enabled==0 or Config.RemoveDefinedActionBindings==0 then
+    local restored=Suppression:Restore()
+    SuppressionDirty={};SuppressionNeedsSnapshot=true
+    return restored
+  end
   local contexts={}
-  each_container(safe(Enhanced.playerInput,"AppliedInputContexts"),function(k)
-    local c=unwrap(k);if valid(c) then contexts[#contexts+1]=c end
-  end)
-  return Suppression:Apply(contexts)
+  if SuppressionNeedsSnapshot then
+    if not Enhanced or not valid(Enhanced.playerInput) then return false end
+    assert(each_container(safe(Enhanced.playerInput,'AppliedInputContexts'),function(k)
+      local c=unwrap(k);if valid(c) then contexts[#contexts+1]=c end
+    end),'Active context access unavailable')
+  end
+  for _,c in pairs(SuppressionDirty) do if valid(c) then contexts[#contexts+1]=c end end
+  local done=Suppression:Apply(contexts)
+  if done then SuppressionNeedsSnapshot=false;SuppressionDirty={} end
+  return done
 end
 
 -- Dawnwalker keeps gameplay mapping contexts applied while Pause, Game Hub and
@@ -283,8 +299,11 @@ local function install_input_gate_hooks()
     if valid(o) then
       record_blocking_widget(o,false)
       if PersistentInput and fullname(o):match("^(%S+)")=="WBP_Inventory_QuickslotBindOverlay_C" then
-        local ok,err=pcall(function() PersistentInput:CloseInventory() end)
-        if not ok then log("Inventory context removal failed: "..tostring(err)) end
+        local ok,err=pcall(function() PersistentInput:DeactivateInventory() end)
+        if not ok then
+          log("Inventory context removal failed: "..tostring(err))
+          if InventoryNavigation then InventoryNavigation:Resume() end
+        end
       end
     end
   end,function() end)
@@ -306,9 +325,9 @@ local function install_input_gate_hooks()
   sync_blocking_widgets_once()
   report_input_gate()
 end
-if Config.Enabled~=0 then install_input_gate_hooks() end
+install_input_gate_hooks()
 
-if Config.Enabled~=0 then
+do
   RegisterLoadMapPreHook(function()
     if PersistentInput then
       local ok,err=pcall(function() PersistentInput:CloseInventory();assert(PersistentInput:Close()) end)
@@ -411,6 +430,8 @@ local function retained_input_object(className,name)
 end
 PersistentInput=dofile(scripts.."/persistent_input.lua")({
   valid=valid,path=object_path,resolve=native_action,retain=retained_input_object,name=FName,
+  load_inventory=function() return ModRef:GetSharedVariable("QuickslotsForever.InventoryOwner.v1") end,
+  save_inventory=function(s) ModRef:SetSharedVariable("QuickslotsForever.InventoryOwner.v1",s) end,
   same=function(a,b) return valid(a) and valid(b) and fullname(a)==fullname(b) end,
   key=function(vk) return VK_TO_FKEY[vk] end,
   each=function(c,fn) assert(each_container(c,function(i,v) fn(i,unwrap(v)) end),"Mapping access failed") end,
@@ -462,11 +483,12 @@ Suppression=dofile(scripts.."/runtime_suppression.lua")({
   end,
 })
 sync_inventory_context=function(overlay)
-  if Config.Enabled==0 then PersistentInput:CloseInventory();return false end
-  local o=overlay or bind_overlay()
-  local sub=live_subsystem()
-  if valid(o) and (overlay~=nil or o:IsActivated()) and valid(sub) then return PersistentInput:OpenInventory(o,sub) end
-  PersistentInput:CloseInventory()
+  if Config.Enabled==0 or not valid(overlay) then return true end
+  local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
+  if not valid(sub) then return false end
+  if not PersistentInput:AttachInventory(overlay,sub) then return false end
+  if overlay:IsActivated() then return PersistentInput:OpenInventory(overlay,sub) end
+  PersistentInput:DeactivateInventory() -- guarded: no removal when already absent
   return true
 end
 local function clear_bridge_bindings()
@@ -652,6 +674,8 @@ local function setup_enhanced_input()
   if not cleared then log("Enhanced Input: "..tostring(clearErr)); return false end
   local contextCleared,contextError=clear_old_context(sub)
   if not contextCleared then log("Draw context cleanup pending: "..tostring(contextError)); return false end
+  SuppressionNeedsSnapshot=true
+  Enhanced.controller,Enhanced.pawn=pc,pawn
   Enhanced.sub,Enhanced.playerInput,Enhanced.inputComponent=sub,pi,input
   Enhanced.inputComponentPath=object_path(input)
   local defs={}
@@ -688,10 +712,12 @@ local function setup_enhanced_input()
     log("AddMappingContext failed for Draw Weapon: "..tostring(drawAddErr))
     return false
   end
-  pcall(function() sub:RequestRebuildControlMappings(options,1) end)
   Enhanced.gameplayContextSignature=gameplay_context_signature(pi)
   Enhanced.ready=true
-  sync_inventory_context()
+  if RecoveryWork then
+    RecoveryWork:AfterReady('hud')
+    RecoveryWork:AfterReady('cleanup')
+  end
   sync_blocking_widgets_once()
   log(string.format("Enhanced Input ready on %s: %d persistent action bindings + native Draw Weapon, Tap/Hold threshold=%d ms, gameplay routing=%s.",Enhanced.inputComponentPath or "<unknown>",#Enhanced.actions,Config.HoldThresholdMs,Enhanced.gameplayContextSignature))
   return true
@@ -713,7 +739,6 @@ local function ensure_context(ctx,priority,label,knownPresent)
   local ok,e=pcall(function() Enhanced.sub:AddMappingContext(ctx,priority,options) end)
   if not ok then log("Enhanced Input context restore failed: "..label..": "..tostring(e)); return false end
   log("Enhanced Input context restored: "..label)
-  pcall(function() Enhanced.sub:RequestRebuildControlMappings(options,1) end)
   return true
 end
 local DisabledContextCleaned=false
@@ -721,7 +746,7 @@ local function enhanced_input_step()
       if Config.Enabled~=0 then
         DisabledContextCleaned=false
         if Enhanced.ready then
-          local liveSub=live_subsystem(); local _,_,liveInput,liveComponent=find_gameplay_stack()
+          local liveSub=live_subsystem(); local liveController,livePawn,liveInput,liveComponent=find_gameplay_stack()
           local invalidReason
           if not valid(Enhanced.sub) then invalidReason="stored subsystem invalid"
           elseif not valid(Enhanced.playerInput) then invalidReason="stored PlayerInput invalid"
@@ -730,31 +755,30 @@ local function enhanced_input_step()
           elseif not valid(liveSub) then invalidReason="live subsystem unavailable"
           elseif not valid(liveInput) then invalidReason="live PlayerInput unavailable"
           elseif not valid(liveComponent) then invalidReason="live input component unavailable"
+          elseif not valid(Enhanced.controller) or not valid(Enhanced.pawn) then invalidReason="stored player owner invalid"
+          elseif not valid(liveController) or not valid(livePawn) then invalidReason="live player owner unavailable"
+          elseif fullname(liveController)~=fullname(Enhanced.controller) or fullname(livePawn)~=fullname(Enhanced.pawn) then invalidReason="player owner changed"
           elseif fullname(liveSub)~=fullname(Enhanced.sub) then invalidReason="subsystem changed"
           elseif fullname(liveInput)~=fullname(Enhanced.playerInput) then invalidReason="PlayerInput changed"
           elseif fullname(liveComponent)~=fullname(Enhanced.inputComponent) then invalidReason="input component changed" end
           if invalidReason then
             log("Enhanced Input lifecycle invalidated: "..invalidReason.."; rebuilding helper scope.")
             local closed=clear_bridge_bindings()
-            if closed then Enhanced.ready=false end
+            if closed then Enhanced.ready=false else return false end
           else
             local currentSignature,drawPresent=gameplay_context_signature(liveInput,Enhanced.drawContext)
-            if currentSignature~=Enhanced.gameplayContextSignature then
-              log("Enhanced Input gameplay routing changed: "..tostring(Enhanced.gameplayContextSignature).." -> "..currentSignature.."; rebuilding helper scope.")
-              local closed=clear_bridge_bindings()
-              if closed then Enhanced.ready=false end
-            else
-              ensure_context(Enhanced.drawContext,10001,"Draw Weapon",drawPresent)
-              PersistentInput:EnsureGameplay(Enhanced.sub)
-            end
+            Enhanced.gameplayContextSignature=currentSignature
+            if not ensure_context(Enhanced.drawContext,10001,"Draw Weapon",drawPresent) then return false end
+            PersistentInput:EnsureGameplay(Enhanced.sub)
           end
         end
-        if not Enhanced.ready then setup_enhanced_input() end
+        if not Enhanced.ready then return setup_enhanced_input() end
       elseif not DisabledContextCleaned then
         local closed=clear_bridge_bindings()
         local sub=live_subsystem()
         if closed and valid(sub) then DisabledContextCleaned=clear_old_context(sub)==true end
       end
+  return Config.Enabled==0 or Enhanced.ready
 end
 
 -- Runtime suppression is applied to active native contexts after lifecycle events.
@@ -769,6 +793,8 @@ end
 local NativeKeys=dofile(scripts.."/action_indicators.lua")({
   valid=valid,path=object_path,resolve=native_action,
   same=function(a,b) return valid(a) and valid(b) and fullname(a)==fullname(b) end,
+  load=function() return ModRef:GetSharedVariable("QuickslotsForever.IndicatorActions.v1") end,
+  save=function(s) ModRef:SetSharedVariable("QuickslotsForever.IndicatorActions.v1",s) end,
 })
 local function bindings_widget(owner,props)
   for _,p in ipairs(props) do local w=safe(owner,p); if valid(w) then return w end end
@@ -786,21 +812,23 @@ local function override_icons(ability,consumable,verbose)
   return n
 end
 local PathCache=dofile(scripts.."/object_paths.lua")
-local pathEnv={find=FindAllOf,valid=valid,path=object_path,resolve=native_action}
+local pathEnv={find=FindAllOf,valid=valid,path=object_path,resolve=native_action,
+  live=function(o) return (object_path(o) or ''):find('/Engine/Transient',1,true)~=nil end}
 local RadialPaths=PathCache(pathEnv,"WBP_Combat_Focus_QuickslotBindingsRadial_C")
 local PromptPaths=PathCache(pathEnv,"WBP_HUD_Quickslots_ChangePrompt_C")
-local function override_skill_wheel(verbose)
-  local n=0
-  RadialPaths:Visit(function(radial)
-      for slot=1,4 do
-        local entity=safe(radial,SLOT_WIDGET[slot])
-        local nested=valid(entity) and safe(entity,"Button") or nil
-        local button=valid(nested) and nested or entity
-        if NativeKeys:Set(button,PersistentInput.actions["Ability"..slot]) then n=n+1 end
-      end
-  end)
-  if verbose and n>0 then log("Skill-wheel key widgets updated: "..n.." widget(s) across all live radial wheels.") end
-  return n
+local function connect_radial(radial)
+  local buttons={}
+  for slot,direction in ipairs(SLOT_WIDGET) do
+    local entity=safe(radial,direction)
+    local button=valid(entity) and safe(entity,'Button') or nil
+    if not valid(button) then return 'children_missing' end
+    buttons[slot]=button
+  end
+  if not Enhanced.ready then return end
+  for slot,button in ipairs(buttons) do
+    if not NativeKeys:Set(button,PersistentInput.actions['Ability'..slot]) then return end
+  end
+  return true
 end
 
 local function same(a,b) return valid(a) and valid(b) and fullname(a)==fullname(b) end
@@ -828,8 +856,13 @@ local function hide_swap_prompt(hud,ability)
   return hidden
 end
 
-local function wheel_offsets()
-  if Config.SwapAbilitiesWithConsumables~=0 then
+-- Format order: 1 single, 2 consumables above, 3 abilities above.
+local function desired_wheel_format()
+  if Config.ShowBothWheels==0 then return 'single' end
+  return Config.SwapAbilitiesWithConsumables~=0 and 'abilities_above' or 'consumables_above'
+end
+local function wheel_offsets(format)
+  if format=='abilities_above' then
     -- The labels describe the on-screen position, not a permanently-owned widget.
     -- Once swapped, the Abilities controls own the Consumables widget position and
     -- the Consumables controls own the Abilities widget position.
@@ -837,123 +870,206 @@ local function wheel_offsets()
   end
   return Config.AbilitiesX,Config.AbilitiesY,Config.ConsumablesX,Config.ConsumablesY
 end
-local VisualGuardArmed=false
-local LastLayoutError
--- Do not hook RebelInputWidget:UpdateActionWidget. During initial UI startup,
--- UE4SS 3.0.1 can crash while marshalling that function's UObject parameter
--- before Lua is entered. Only existing lifecycle/creation refresh requests update
--- native icons; this candidate does not hook that function.
-refresh_hud_visuals=function(verbose,hud)
-  -- Re-read the persisted visual choice whenever the HUD is rebuilt/reset.
-  -- This keeps death/load reconstruction consistent with the Mod Menu checkbox.
-  local h=hud or game_hud(); if not valid(h) then if verbose then log("GUI: no live GameHUD.") end; return false end
-  local s=safe(h,"QuickslotsSwitcher"); local a=safe(h,"WBP_AA_Quickslots"); local c=safe(h,"WBP_HUD_Quickslots")
-  if not valid(s) or not valid(a) or not valid(c) then if verbose then log("GUI: quickslot widgets not ready.") end; return false end
-  if not belongs(h,s) or not belongs(h,a) or not belongs(h,c) then if verbose then log("GUI: stale HUD tree rejected.") end; return false end
-  local ax,ay,cx,cy=wheel_offsets()
-  local laidOut,layoutError=WheelLayout:Update(h,s,a,c,Config.ShowBothWheels~=0,ax,ay,cx,cy)
-  if not laidOut then
-    if LastLayoutError~=layoutError then log("GUI layout pending: "..tostring(layoutError)); LastLayoutError=layoutError end
-  else LastLayoutError=nil end
-  local connected=override_icons(a,c,verbose)
-  override_skill_wheel(verbose)
-  if laidOut and Config.ShowBothWheels~=0 then hide_swap_prompt(h,a) end
-  return laidOut and connected==8
-end
-
-local function apply_hud(hud)
-  local h=hud or game_hud(); if not valid(h) then log("GUI: no live GameHUD."); return end
-  local s=safe(h,"QuickslotsSwitcher"); local a=safe(h,"WBP_AA_Quickslots"); local c=safe(h,"WBP_HUD_Quickslots"); if not valid(s) or not valid(a) or not valid(c) then log("GUI: quickslot widgets not ready."); return end
-  if not belongs(h,s) or not belongs(h,a) or not belongs(h,c) then log("GUI: stale HUD tree rejected."); return end
-  VisualGuardArmed=true
-  if not refresh_hud_visuals(false,h) then return false end
-  local ax,ay,cx,cy=wheel_offsets()
-  log(string.format("GUI applied: ShowBothWheels=%s, configured Abilities=(%d,%d), Consumables=(%d,%d). Persistent HUD visual guard armed.",tostring(Config.ShowBothWheels~=0),ax,ay,cx,cy))
+local function wheel_children_ready(ability,consumable)
+  for _,entry in ipairs({{ability,{"WBP_AA_Quickslots_Bindings","Bindings","QuickslotBindingsRadial"}},
+      {consumable,{"WBP_HUD_Quickslots_Bindings","Bindings","QuickslotBindingsRadial"}}}) do
+    if not valid(entry[1]) then return false end
+    local bindings=bindings_widget(entry[1],entry[2])
+    if not valid(bindings) then return false end
+    for _,direction in ipairs(SLOT_WIDGET) do if not valid(safe(bindings,direction)) then return false end end
+  end
   return true
 end
-
-local RadialRefreshPending=false
-local FullVisualRefreshPending=false
-local function queue_radial_refresh(fullRefresh)
-  if not VisualGuardArmed then return end
-  FullVisualRefreshPending=FullVisualRefreshPending or fullRefresh==true
-  if RadialRefreshPending then return end
-  RadialRefreshPending=true
-  ExecuteWithDelay(1,function()
-    ExecuteInGameThread(function()
-      RadialRefreshPending=false
-      local refreshAll=FullVisualRefreshPending
-      FullVisualRefreshPending=false
-      if Config.Enabled~=0 and VisualGuardArmed then
-        if refreshAll then refresh_hud_visuals(false) else override_skill_wheel(false) end
-      end
-    end)
-  end)
-end
-
--- Creation callbacks only request work. Resolve live widgets on the game thread,
--- without retaining or mutating the possibly partial creation wrapper.
-if Config.Enabled~=0 then pcall(function()
-  NotifyOnNewObject("/Game/_Dawnwalker/UI/_Unified/HUD/Quickslots/WBP_HUD_Quickslots_ChangePrompt.WBP_HUD_Quickslots_ChangePrompt_C",function()
-    PromptPaths:Invalidate()
-    request_recovery()
-    if Config.ShowBothWheels~=0 then queue_radial_refresh(true) end
-  end)
-  PromptPaths:EnableNotifications()
-end) end
-
-if Config.Enabled~=0 then pcall(function()
-  RegisterHook("/Game/_Dawnwalker/UI/_Unified/HUD/CombatFocus/WBP_Combat_Focus_QuickslotBindingsRadial.WBP_Combat_Focus_QuickslotBindingsRadial_C:Rebuild All",function() end,function()
-    RadialPaths:Invalidate()
-    queue_radial_refresh()
-  end)
-end) end
-
-if Config.Enabled~=0 then pcall(function()
-  NotifyOnNewObject("/Game/_Dawnwalker/UI/_Unified/HUD/CombatFocus/WBP_Combat_Focus_QuickslotBindingsRadial.WBP_Combat_Focus_QuickslotBindingsRadial_C",function()
-    RadialPaths:Invalidate()
-    queue_radial_refresh()
-  end)
-  RadialPaths:EnableNotifications()
-end) end
-
-if Config.Enabled~=0 then
-  for _,path in ipairs({
-    "/Script/RebelInputDisplay.RebelInputWidget",
-    "/Game/_Dawnwalker/UI/_Unified/HUD/WBP_GameHUD.WBP_GameHUD_C",
-  }) do
-    pcall(NotifyOnNewObject,path,function()
-      if RecoveryWork then RecoveryWork:Request('hud') end
-      RadialPaths:Invalidate()
-    end)
+local function owning_hud(o)
+  for _=1,20 do
+    if not valid(o) then return nil end
+    if fullname(o):match('^(%S+)')=='WBP_GameHUD_C' then return o end
+    o=o:GetOuter()
   end
 end
+-- Format changes are independent of action assignment and input readiness.
+local function apply_wheel_format(h,format)
+  if not valid(h) then return end
+  if format~='single' and format~='abilities_above' and format~='consumables_above' then return end
+  local switcher=safe(h,'QuickslotsSwitcher')
+  local ability=safe(h,'WBP_AA_Quickslots')
+  local consumable=safe(h,'WBP_HUD_Quickslots')
+  if not valid(switcher) or not valid(ability) or not valid(consumable) then return 'children_missing' end
+  if not belongs(h,switcher) or not belongs(h,ability) or not belongs(h,consumable) then return end
+  local ax,ay,cx,cy=wheel_offsets(format)
+  local ok,err=WheelLayout:Update(h,switcher,ability,consumable,format~='single',ax,ay,cx,cy)
+  if not ok then log('Wheel format failed: '..tostring(err));return end
+  if format~='single' then hide_swap_prompt(h,ability) end
+  return true
+end
+local function setup_indicators(h)
+  if not valid(h) then return end
+  ShortcutTargets:SetHUD(h)
+  local ability=safe(h,'WBP_AA_Quickslots')
+  local consumable=safe(h,'WBP_HUD_Quickslots')
+  if not wheel_children_ready(ability,consumable) then return 'children_missing' end
+  if not Enhanced.ready then return end
+  return override_icons(ability,consumable,false)==8
+end
+local function setup_hud(context,kind)
+  local h=kind=='hud' and context or owning_hud(context)
+  if not valid(h) then return end
+  if kind=='switcher' then
+    local switcher=safe(h,'QuickslotsSwitcher')
+    if valid(switcher) and not same(switcher,context) then return end
+  end
+  return h
+end
+-- Both setup responsibilities share the same 100 ms wakeup, but keep separate
+-- completion state so missing indicators cannot block panel formatting.
+local wheelDelayCallbacks
+local function delay_wheel_setup(ms,fn)
+  if wheelDelayCallbacks then wheelDelayCallbacks[#wheelDelayCallbacks+1]=fn;return end
+  local batch={fn};wheelDelayCallbacks=batch
+  local ok,err=pcall(ExecuteWithDelay,ms,function()
+    wheelDelayCallbacks=nil
+    for _,callback in ipairs(batch) do callback() end
+  end)
+  if not ok then wheelDelayCallbacks=nil;error(err) end
+end
+local function setup_worker(run,remember_success)
+  return dofile(scripts..'/widget_setup.lua')({
+    valid=valid,key=function(o,kind) return object_path(kind=='radial' and o or owning_hud(o) or o) end,
+    signature=remember_success~=false and function(o,kind)
+      local widgets={}
+      if kind=='radial' then
+        for _,direction in ipairs(SLOT_WIDGET) do widgets[#widgets+1]=safe(safe(o,direction),'Button') end
+      else
+        local h=setup_hud(o,kind)
+        for _,entry in ipairs({{safe(h,'WBP_AA_Quickslots'),{'WBP_AA_Quickslots_Bindings','Bindings','QuickslotBindingsRadial'}},
+            {safe(h,'WBP_HUD_Quickslots'),{'WBP_HUD_Quickslots_Bindings','Bindings','QuickslotBindingsRadial'}}}) do
+          local bindings=valid(entry[1]) and bindings_widget(entry[1],entry[2])
+          for _,direction in ipairs(SLOT_WIDGET) do widgets[#widgets+1]=safe(bindings,direction) end
+        end
+      end
+      return widgets
+    end or nil,
+    same_signature=function(a,b)
+      if not a or not b or #a~=#b then return false end
+      for i,w in ipairs(a) do if not same(w,b[i]) then return false end end
+      return true
+    end,
+    enabled=function() return Config.Enabled~=0 end,
+    delay=delay_wheel_setup,queue=ExecuteInGameThread,log=log,run=run,remember_success=remember_success,
+  })
+end
+local IndicatorSetup=setup_worker(function(context,kind)
+  if kind=='radial' then return connect_radial(context) end
+  return setup_indicators(setup_hud(context,kind))
+end)
+local FormatSetup=setup_worker(function(context,kind)
+  return apply_wheel_format(setup_hud(context,kind),desired_wheel_format())
+end,false)
+local function request_wheel_setup(context,kind)
+  IndicatorSetup:Request(context,kind)
+  if kind~='radial' then FormatSetup:Request(context,kind) end
+end
+local function watch_widget(path,kind)
+  local ok,err=pcall(NotifyOnNewObject,path,function(o)
+    if not valid(o) then return end
+    local path=object_path(o)
+    if not path or not path:find('/Engine/Transient',1,true) or path:find('Default__',1,true) then return end
+    if kind=='switcher' then
+      local short=path:match('([^%.:]+)$')
+      if short~='QuickslotsSwitcher' then return end
+      if not valid(owning_hud(o)) then return end
+    end
+    if kind=='radial' then RadialPaths:Add(o) end
+    if kind=='hud' then ShortcutTargets:SetHUD(o) end
+    request_wheel_setup(o,kind)
+  end)
+  if not ok then log('Wheel creation notification unavailable: '..tostring(err)) end
+end
+watch_widget('/Script/UMG.WidgetSwitcher','switcher')
+watch_widget('/Game/_Dawnwalker/UI/_Unified/HUD/WBP_GameHUD.WBP_GameHUD_C','hud')
+watch_widget('/Game/_Dawnwalker/UI/_Unified/HUD/CombatFocus/WBP_Combat_Focus_QuickslotBindingsRadial.WBP_Combat_Focus_QuickslotBindingsRadial_C','radial')
+RadialPaths:EnableNotifications()
+do
+  local ok,err=pcall(NotifyOnNewObject,
+    '/Game/_Dawnwalker/UI/_Unified/HUD/Quickslots/WBP_HUD_Quickslots_ChangePrompt.WBP_HUD_Quickslots_ChangePrompt_C',function(o)
+      if not valid(o) or not (object_path(o) or ''):find('/Engine/Transient',1,true) then return end
+      ExecuteInGameThread(function()
+        if not valid(o) then return end
+        PromptPaths:Add(o)
+        if Config.Enabled~=0 and Config.ShowBothWheels~=0 then WheelLayout:HidePrompt(o) end
+      end)
+    end)
+  if not ok then log('Swap prompt notification unavailable: '..tostring(err)) end
+end
+InventoryNavigation=dofile(scripts..'/inventory_navigation.lua')({
+  valid=valid,same=same,enabled=function() return Config.Enabled~=0 end,
+  delay=ExecuteWithDelay,queue=ExecuteInGameThread,log=log,
+  selected=function(m) return m:IsTabActive({TagName=FName('UI.Menu.HUB.Inventory')}) end,
+  panel=function(m) return m:GetSpawnedTabWidget({TagName=FName('UI.Menu.HUB.Inventory')}) end,
+  active=function(p) return p:IsActivated() end,
+  find_overlay=function() return get_live('WBP_Inventory_QuickslotBindOverlay_C',function(o)
+    return (object_path(o) or ''):find('/Engine/Transient',1,true)~=nil
+  end) end,
+  prepare=sync_inventory_context,
+  deactivate=function() PersistentInput:DeactivateInventory() end,
+})
+local function snapshot_inventory_navigation()
+  ExecuteInGameThread(function()
+    if Config.Enabled==0 then return end
+    local m=get_live('HUBManagerSubystem')
+    if valid(m) and m:IsTabActive({TagName=FName('UI.Menu.HUB.Inventory')}) then
+      InventoryNavigation:OnTab(m,'UI.Menu.HUB.Inventory')
+    end
+  end)
+end
+do
+  local path='/Script/DogwoodUI.HUBManagerSubystem:NotifyTabActivated'
+  local ok,err=pcall(RegisterHook,path,function() end,function(context,tag)
+    local owner=unwrap(context)
+    if not valid(owner) then return end
+    local value=unwrap(tag)
+    InventoryNavigation:OnTab(owner,fname_string(safe(value,'TagName')))
+  end)
+  if not ok then log('Inventory navigation hook unavailable: '..tostring(err)) end
+  local closed,why=pcall(RegisterHook,'/Script/DogwoodUI.HUBManagerSubystem:TryHideHUB',function() end,function()
+    InventoryNavigation:CheckClosed()
+  end)
+  if not closed then log('Inventory close hook unavailable: '..tostring(why)) end
+  local created,creationError=pcall(NotifyOnNewObject,
+    '/Game/_Dawnwalker/UI/_Unified/GameHub/Inventory/WBP_Inventory_QuickslotBindOverlay.WBP_Inventory_QuickslotBindOverlay_C',
+    function(o)
+      if valid(o) and (object_path(o) or ''):find('/Engine/Transient',1,true) then InventoryNavigation:OnOverlay(o) end
+    end)
+  if not created then log('Inventory overlay creation notification unavailable: '..tostring(creationError)) end
+  -- One bootstrap covers enabling/reloading with Inventory already open.
+  snapshot_inventory_navigation()
+end
 
--- One cheap timer checks pending event work. Once recovered it dispatches nothing.
--- No cached UObject/path lookup is used to decide whether idle work is needed.
-local AutoHudApplied=false
-local AutoHudName=""
+-- Hooks queue readiness work directly; there is no repeating recovery timer.
 local function update_hud_once()
-  local h=game_hud(); local n=valid(h) and fullname(h) or ""
-  if n=="" then AutoHudApplied=false; AutoHudName=""; return false end
-  if n~=AutoHudName then
-    AutoHudApplied=apply_hud(h)==true
-    if AutoHudApplied then AutoHudName=n end
-  else AutoHudApplied=refresh_hud_visuals(false,h)==true end
-  return AutoHudApplied
+  local h=ShortcutTargets:GetHUD() or get_live('WBP_GameHUD_C',function(o) return (object_path(o) or ''):find('/Engine/Transient',1,true)~=nil end)
+  if valid(h) then ShortcutTargets:SetHUD(h);request_wheel_setup(h,'hud') end
+  RadialPaths:Visit(function(radial) IndicatorSetup:Request(radial,'radial') end)
+  -- No context means no retry. Creation/input-ready events will request setup.
+  return true
 end
 reset_world_visuals=function()
-  NativeKeys:Forget()
-  WheelLayout:Forget()
-  AutoHudName=""; AutoHudApplied=false; VisualGuardArmed=false
+  -- Keep scalar indicator restoration records if the native HUD survives travel.
+  IndicatorSetup:Invalidate();FormatSetup:Invalidate()
+  ShortcutTargets:Invalidate()
+  if InventoryNavigation then InventoryNavigation:Invalidate() end
+  -- Restore before travel: some transitions keep the HUD instance alive.
+  -- Forgetting a still-reparented wheel would lose the native hierarchy snapshot.
+  local restored,err=WheelLayout:RestoreAll()
+  if not restored then log('Wheel layout restoration before travel pending: '..tostring(err)) end
   RadialPaths:Invalidate(); PromptPaths:Invalidate()
 end
 RecoveryWork=dofile(scripts.."/event_work.lua")({
-  attempts=6,queue=ExecuteInGameThread,log=log,
-  enabled=function() return Config.Enabled~=0 or Config.RemoveDefinedActionBindings~=0 end,
+  attempts=6,queue=ExecuteInGameThread,delay=ExecuteWithDelay,retry_ms=500,log=log,
+  enabled=function() return true end, -- DMM master-enable events can wake recovery
   run=function(name)
-    if name=='input' then enhanced_input_step(); return Enhanced.ready end
-    if name=='hud' then return update_hud_once() end
+    if name=='input' then return enhanced_input_step() end
+    if name=='hud' then return Config.Enabled==0 or update_hud_once() end
     if name=='cleanup' then return remove_native_conflicts(nil,nil) end
   end,
 })
@@ -961,11 +1077,13 @@ local function recovery_hook(path,callback)
   local ok,err=pcall(RegisterHook,path,function() end,callback)
   if not ok then log("Recovery hook unavailable: "..path..": "..tostring(err)) end
 end
-if Config.Enabled~=0 or Config.RemoveDefinedActionBindings~=0 then
+do
   recovery_hook('/Script/Engine.PlayerController:ClientRestart',request_recovery)
   recovery_hook('/Script/Engine.PlayerController:ClientRetryClientRestart',request_recovery)
   recovery_hook('/Script/Engine.Controller:OnRep_Pawn',request_recovery)
-  recovery_hook('/Script/RebelInput.RebelInputMappingSubsystem:ApplyPendingKeyboardMappings',request_recovery)
+  recovery_hook('/Script/RebelInput.RebelInputMappingSubsystem:ApplyPendingKeyboardMappings',function()
+    RequestSuppressionSnapshot(true)
+  end)
   -- Suppress a newly applied native context before it enters the active set.
   -- RequestRebuildControlMappingsUsingContext never calls AddMappingContext.
   local okSuppressHook,suppressHookError=pcall(RegisterHook,
@@ -973,65 +1091,73 @@ if Config.Enabled~=0 or Config.RemoveDefinedActionBindings~=0 then
     function(_,mappingContext)
       if Config.Enabled==0 or Config.RemoveDefinedActionBindings==0 or not Suppression then return end
       local context=unwrap(mappingContext)
-      if valid(context) then
+      if valid(context) and (object_path(context) or ''):match('^/Game/') then
+        Suppression:Invalidate(context)
         local ok,err=pcall(function() Suppression:Apply({context}) end)
-        if not ok then log('Context suppression failed: '..tostring(err)) end
+        if not ok then
+          SuppressionDirty[object_path(context)]=context
+          if RecoveryWork then RecoveryWork:Request('cleanup') end
+          log('Context suppression failed: '..tostring(err))
+        end
       end
     end,function() end)
   if not okSuppressHook then log('Pre-activation suppression hook unavailable: '..tostring(suppressHookError)) end
   for _,name in ipairs({'AddMappingContext','RemoveMappingContext','ClearAllMappings'}) do
     recovery_hook('/Script/EnhancedInput.EnhancedInputSubsystemInterface:'..name,function()
       if Config.Enabled~=0 then RecoveryWork:Request('input') end
-      if Config.RemoveDefinedActionBindings~=0 then RecoveryWork:Request('cleanup') end
     end)
   end
   for _,class in ipairs({'/Script/Engine.PlayerController','/Script/EnhancedInput.EnhancedInputLocalPlayerSubsystem',
-      '/Script/EnhancedInput.EnhancedInputComponent'}) do
-    local ok,err=pcall(NotifyOnNewObject,class,request_recovery)
+      '/Script/EnhancedInput.EnhancedInputComponent','/Script/EnhancedInput.InputAction',
+      '/Script/EnhancedInput.InputMappingContext'}) do
+    local ok,err=pcall(NotifyOnNewObject,class,function(o)
+      if not valid(o) or fullname(o):find('Default__',1,true) then return end
+      if class=='/Script/EnhancedInput.InputAction' or class=='/Script/EnhancedInput.InputMappingContext' then
+        if Enhanced.ready then return end
+      end
+      request_recovery()
+    end)
     if not ok then log('Recovery creation notification unavailable: '..class..': '..tostring(err)) end
   end
   request_recovery()
-  LoopAsync(500,function() return RecoveryWork:Tick() end)
+  RecoveryWork:Request('hud')
 end
 
--- Mod Menu Apply writes config.ini. Reconfigure bindings and persistent HUD widgets
--- in place so existing native key widgets are updated without replacement on Lua
--- restart. Master/cleanup-toggle changes still restart because they determine which
--- hooks and watchdogs are installed at module load. Preset edits remain in memory
--- until Apply.
-local Armed=false
+-- Mod Menu Apply owns configuration changes. Subscribe once; master toggles
+-- run in place so neither persistent actions nor the subscription are replaced.
 local function reconfigure_from_text(now)
-  local previous=Config
+  -- Keep the last fully reconciled baseline when an Apply fails partway through.
+  local retrying=PendingConfigBaseline~=nil
+  if retrying and IndicatorSetup then IndicatorSetup:Invalidate() end
+  local previous=PendingConfigBaseline or Config
+  PendingConfigBaseline=previous
   local updated=load_config(now)
-  if updated.Enabled~=previous.Enabled then
+  if updated.Enabled~=previous.Enabled and updated.Enabled==0 then
     if NativeKeys then
       local restored,why=NativeKeys:RestoreAll()
-      if not restored then log("Native display restoration pending: "..tostring(why)); return true end
+      if not restored then log("Native display restoration pending: "..tostring(why)); return false end
     end
     local restored,restoreError=WheelLayout:RestoreAll()
-    if not restored then log("GUI restoration pending before restart: "..tostring(restoreError)); return true end
+    if not restored then log("GUI restoration pending before disable: "..tostring(restoreError)); return false end
     local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
-    if not clear_bridge_bindings() then return true end
+    if not clear_bridge_bindings() then return false end
     Enhanced.ready=false
-    if not clear_old_context(sub) then return true end
+    if not clear_old_context(sub) then return false end
     PersistentInput:CloseInventory()
     Suppression:Restore()
-    LastConfigText=now
-    RestartCurrentMod()
-    return false
+    if RecoveryWork then RecoveryWork:Invalidate() end
+    reset_world_visuals()
   end
 
   Config=updated
-  LastConfigText=now
-  if updated.RemoveDefinedActionBindings~=previous.RemoveDefinedActionBindings then
-    remove_native_conflicts()
-  end
-  local inputChanged=updated.HoldThresholdMs~=previous.HoldThresholdMs
+  local suppressionChanged=retrying or updated.RemoveDefinedActionBindings~=previous.RemoveDefinedActionBindings
+  local inputChanged=retrying or updated.Enabled~=previous.Enabled or updated.HoldThresholdMs~=previous.HoldThresholdMs
       or updated.DrawWeapon~=previous.DrawWeapon or updated.DrawWeaponMode~=previous.DrawWeaponMode
   for _,group in ipairs(BINDING_GROUPS) do for slot=1,4 do
     local field=group..slot
     if updated[field]~=previous[field] or updated[field.."Mode"]~=previous[field.."Mode"] then inputChanged=true end
   end end
+  if inputChanged and RecoveryWork then RecoveryWork:Invalidate() end
   if inputChanged and Enhanced.ready then
     local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
     local closed=clear_bridge_bindings()
@@ -1044,22 +1170,33 @@ local function reconfigure_from_text(now)
       log("Committed config change is waiting for helper cleanup before input can be rebuilt.")
     end
   end
-  request_recovery()
+  local formatChanged=retrying or updated.Enabled~=previous.Enabled
+  for _,field in ipairs({'ShowBothWheels','SwapAbilitiesWithConsumables','AbilitiesX','AbilitiesY','ConsumablesX','ConsumablesY'}) do
+    if updated[field]~=previous[field] then formatChanged=true end
+  end
+  if formatChanged then FormatSetup:Invalidate() end
+  if updated.Enabled~=previous.Enabled and updated.Enabled~=0 then snapshot_inventory_navigation()
+  elseif inputChanged and InventoryNavigation then InventoryNavigation:Resume() end
+  if inputChanged then request_recovery() end
+  if suppressionChanged then
+    RequestSuppressionSnapshot(true)
+    assert(remove_native_conflicts()~=false,'Suppression update pending')
+  end
+  if formatChanged and Config.Enabled~=0 then RecoveryWork:Request('hud') end
+  LastConfigText=now
+  PendingConfigBaseline=nil
   log("Applied committed config changes; input rebuild="..tostring(inputChanged)..".")
   return true
 end
-local function watch()
-  ExecuteWithDelay(750,function()
-    local now=readall(CONFIG_PATH)
-    if now==nil or not now:match("%[General%]") or not now:match("%[Bindings%]") then watch(); return end
-    if Armed and now~=LastConfigText then
-      ExecuteInGameThread(function()
-        if reconfigure_from_text(now) then watch() end
-      end)
-      return
-    end
-    LastConfigText=now; Armed=true; watch()
-  end)
-end
-watch()
+local notificationOk,notificationError=pcall(function()
+  local api=dofile(scripts.."/dmm_api.lua")
+  dofile(scripts.."/config_notifications.lua")({
+    subscribe=api.subscribe,queue=ExecuteInGameThread,log=log,
+    read=function() return readall(CONFIG_PATH) end,
+    current=function() return LastConfigText end,
+    dirty=function() return PendingConfigBaseline~=nil end,
+    apply=reconfigure_from_text,
+  })
+end)
+if not notificationOk then log("DMM Apply subscription unavailable: "..tostring(notificationError)) end
 log("Loaded v"..VERSION..(Config.Enabled~=0 and ". Auto-initialization is deferred until the local player/HUD are live." or ". Disabled in Mod Menu; gameplay/HUD initialization skipped."))
