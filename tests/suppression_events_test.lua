@@ -19,7 +19,7 @@ assert(snapshots==1 and visits==1 and rebuilds==1,'unchanged cleanup performs no
 context.Mappings[1].Key.KeyName='Two';context.Mappings[1].SettingBehavior=0
 snapshot(true);assert(run());assert(snapshots==2 and visits==2 and rebuilds==2,'Controls remap invalidates mapping cache')
 suppression:Invalidate(context);assert(suppression:Apply({context}));assert(visits==3 and snapshots==2,'incoming context only scans that context')
-env.Config.Enabled=0;assert(run());assert(context.Mappings[1].Key.KeyName=='One' and rebuilds==3)
+env.Config.Enabled=0;assert(run());assert(context.Mappings[1].Key.KeyName=='Two' and rebuilds==3,'disable restores the latest native Controls choice')
 env.Config.Enabled=1;assert(run());assert(snapshots==3 and rebuilds==4,'re-enable rescans restored context')
 print('PASS scoped suppression: stable cleanup is scan-free, Controls/incoming-context invalidation and master restoration/re-enable')
 

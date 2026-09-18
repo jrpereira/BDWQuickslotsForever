@@ -37,3 +37,37 @@ api=factory(env);fail=false;before=rebuilds
 assert(api:Apply({native}) and rebuilds==before+1)
 assert(api:Restore())
 print('PASS suppression rebuild obligations survive failed Apply, repeated failure, failed Restore and Lua reload')
+
+-- Native edits become the restoration baseline; row insertion/reordering does
+-- not bind a saved key to the wrong action or to a different trigger variant.
+native.Mappings={map(left,'One'),map(top,'Two')}
+api=factory(env);api:Apply({native})
+native.Mappings[1].Key.KeyName='Three';native.Mappings[1].SettingBehavior=1
+api:Invalidate(native);api:Apply({native});api=factory(env)
+table.insert(native.Mappings,1,map(other,'SpaceBar'))
+native.Mappings[2],native.Mappings[3]=native.Mappings[3],native.Mappings[2]
+assert(api:Restore())
+assert(native.Mappings[1].Key.KeyName=='SpaceBar')
+assert(native.Mappings[2].Key.KeyName=='Two' and native.Mappings[3].Key.KeyName=='Three')
+assert(native.Mappings[3].SettingBehavior==1)
+env.signature=function(m)return m.variant or ''end
+native.Mappings={map(left,'Keyboard'),map(left,'Gamepad'),map(top,'Removed')}
+native.Mappings[1].variant='tap';native.Mappings[2].variant='hold'
+api=factory(env);api:Apply({native})
+native.Mappings[1],native.Mappings[2]=native.Mappings[2],native.Mappings[1]
+table.remove(native.Mappings,3)
+table.insert(native.Mappings,map(other,'External'))
+api:Invalidate(native);api:Apply({native});api=factory(env)
+assert(api:Restore() and saved=='')
+assert(native.Mappings[1].Key.KeyName=='Gamepad' and native.Mappings[2].Key.KeyName=='Keyboard')
+assert(native.Mappings[3].Key.KeyName=='External')
+-- An external replacement must not inherit the deleted action's saved key.
+native.Mappings={map(left,'One')};api:Apply({native})
+native.Mappings[1]=map(other,'Replacement')
+assert(api:Restore() and native.Mappings[1].Key.KeyName=='Replacement' and saved=='')
+-- Multiple equivalent rows remain separate after an unrelated insertion.
+native.Mappings={map(left,'One'),map(left,'Two')};api:Apply({native})
+table.insert(native.Mappings,1,map(other,'Q'));assert(api:Restore())
+local restoredKeys={[native.Mappings[2].Key.KeyName]=true,[native.Mappings[3].Key.KeyName]=true}
+assert(restoredKeys.One and restoredKeys.Two)
+print('PASS suppression reconciliation: fresh native keys, insert/reorder/delete, trigger variants, duplicate actions and reload')

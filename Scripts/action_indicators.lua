@@ -12,9 +12,18 @@ return function(e)
     for p,r in pairs(originals) do lines[#lines+1]=p..'\t'..(r.original or '')..'\t'..r.assigned end
     table.sort(lines);e.save(table.concat(lines,'\n'))
   end
+  local function prune()
+    local changed=false
+    for path in pairs(originals) do
+      if not e.valid(e.resolve(path)) then originals[path]=nil;changed=true end
+    end
+    return changed
+  end
   function api:Set(widget,action)
     if not e.valid(widget) or not e.valid(action) then return false end
     if e.same(widget.EnhancedInputAction,action) then return true end
+    -- Setup-only pruning bounds the scalar journal as native HUDs are replaced.
+    prune()
     local path=e.path(widget)
     if not originals[path] then
       originals[path]={original=e.path(widget.EnhancedInputAction),assigned=e.path(action)}
@@ -37,10 +46,7 @@ return function(e)
   end
   function api:Forget() originals={};save() end
   function api:Prune()
-    for path in pairs(originals) do
-      if not e.valid(e.resolve(path)) then originals[path]=nil end
-    end
-    save()
+    if prune() then save() end
   end
   return api
 end

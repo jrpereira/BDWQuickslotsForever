@@ -5,6 +5,14 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.58
+
+- Allow individual or all slots to be unbound without preventing other shortcuts from initializing; retained actions can be rebound later.
+- Restore the latest native bindings after Controls changes, reconciling mapping identity after insertion, reordering or removal, including multiple mappings per action.
+- Clear previous-world dialogue and visibility input gates before travel while preserving new-world notifications.
+- Prune dead native-indicator restoration records during setup, preserving valid HUD records and avoiding extra work on already-connected indicators.
+- Regression coverage includes empty slots, mapping edits/reordering/removal/reload, travel gates and 100 HUD replacements. No new polling or per-frame work. Native gameplay and FPS acceptance remain pending.
+
 ## 0.3.57
 
 - Rewrite both distributed READMEs for players, emphasizing dedicated shortcuts, Tap/Hold and optional wheel visibility.

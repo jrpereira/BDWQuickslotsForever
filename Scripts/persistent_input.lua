@@ -28,7 +28,9 @@ return function(e)
     local plan={}
     for _,group in ipairs({'Ability','Consumable'}) do for slot=1,4 do
       local field=group..slot
-      plan[#plan+1]={field=field,key=assert(e.key(config[field]),'Unsupported key: '..field),mode=config[field..'Mode'] or 0}
+      local key
+      if config[field]~=0 then key=assert(e.key(config[field]),'Unsupported key: '..field) end
+      plan[#plan+1]={field=field,key=key,mode=config[field..'Mode'] or 0}
     end end
     local context=self.contexts.gameplay
     -- This is our private context, never a native/game context.
@@ -37,7 +39,7 @@ return function(e)
       local a=self.actions[p.field]
       a.ValueType=0;a.bConsumeInput=false;a.bTriggerWhenPaused=false
       e.trigger(a,p.mode,config.HoldThresholdMs/1000)
-      context:MapKey(a,{KeyName=e.name(p.key)})
+      if p.key then context:MapKey(a,{KeyName=e.name(p.key)}) end
     end
     e.each(context.Mappings,function(_,m) m.SettingBehavior=2 end)
   end

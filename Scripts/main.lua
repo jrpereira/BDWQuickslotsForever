@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.57
+-- QuickslotsForever v0.3.58
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.57"
+local VERSION="0.3.58"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -335,6 +335,8 @@ do
       if not ok then log("Suppression restoration before travel failed: "..tostring(err)) end
     end
     InputGate.blockingWidgets={}
+    InputGate.dialogueActive=false
+    InputGate.gameLayersVisible=nil
     if RecoveryWork then RecoveryWork:Invalidate() end
     if Enhanced then
       Enhanced.generation=Enhanced.generation+1
@@ -443,7 +445,22 @@ PersistentInput=dofile(scripts.."/persistent_input.lua")({
     return found
   end,
 })
+local function suppression_mapping_signature(mapping)
+  local parts={}
+  for _,field in ipairs({'Triggers','Modifiers'}) do
+    local items={}
+    each_container(safe(mapping,field),function(i,v)
+      items[#items+1]={index=i,path=object_path(unwrap(v)) or ''}
+    end)
+    table.sort(items,function(a,b) return a.index<b.index end)
+    parts[#parts+1]=field
+    for _,item in ipairs(items) do parts[#parts+1]=item.path end
+  end
+  parts[#parts+1]=object_path(safe(mapping,'PlayerMappableKeySettings')) or ''
+  return table.concat(parts,'|')
+end
 Suppression=dofile(scripts.."/runtime_suppression.lua")({
+  signature=suppression_mapping_signature,
   valid=valid,path=object_path,resolve=native_action,name=FName,target=action_is_defined_here,
   key=function(m) return fname_string(m.Key.KeyName) end,
   each=function(c,fn) assert(each_container(c,function(i,v) fn(i,unwrap(v)) end),"Mapping access failed") end,

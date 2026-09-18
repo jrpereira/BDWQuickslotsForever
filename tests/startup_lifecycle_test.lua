@@ -65,3 +65,19 @@ local reloadedInput=dofile('Scripts/persistent_input.lua')({
 reloadedInput:CloseInventory()
 assert(removed==1 and retainedOverlay.InputMapping==nil and retainedOverlay.InputMappingPriority==-3 and ownership=='')
 print('PASS inventory Lua reload: adopt old ownership and restore original negative priority when overlay closes')
+
+-- Execute the production travel hooks with stale dialogue/visibility state.
+local function read(path)local f=assert(io.open(path));local s=f:read('*a');f:close();return s end
+local source=read('Scripts/main.lua')
+local begin=assert(source:find('do\n  RegisterLoadMapPreHook(function()',1,true))
+local finish=assert(source:find('local function find_gameplay_stack()',begin,true))
+local gate={blockingWidgets={old=true},dialogueActive=true,gameLayersVisible=false}
+local pre,post;local recoveries=0
+assert(load(source:sub(begin,finish-1),'travel-gates','t',setmetatable({InputGate=gate,
+ RegisterLoadMapPreHook=function(fn)pre=fn end,RegisterLoadMapPostHook=function(fn)post=fn end,
+ request_recovery=function()recoveries=recoveries+1 end},{__index=_G})))()
+pre();assert(next(gate.blockingWidgets)==nil and gate.dialogueActive==false and gate.gameLayersVisible==nil)
+-- Notifications from the incoming world must not be erased by the post hook.
+gate.dialogueActive=true;gate.gameLayersVisible=false
+post();assert(recoveries==1 and gate.dialogueActive and gate.gameLayersVisible==false)
+print('PASS travel clears old-world blockers before load and preserves incoming-world events')

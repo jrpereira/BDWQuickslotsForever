@@ -71,3 +71,17 @@ assert(removals==0,'inactive S overlay must not issue repeated context removal')
 assert(api:OpenInventory(overlay,sub));api:DeactivateInventory();api:DeactivateInventory()
 assert(removals==1,'close removes an active assignment context once')
 print('PASS inventory removal idempotence')
+
+-- Empty slots preserve the retained actions and all other slot mappings.
+config.Ability1=0
+api:Configure(config)
+assert(#api.contexts.gameplay.Mappings==7 and api.actions.Ability1==original)
+for _,m in ipairs(api.contexts.gameplay.Mappings) do assert(m.Action~=original) end
+for _,g in ipairs({'Ability','Consumable'}) do for i=1,4 do config[g..i]=0 end end
+api:Configure(config)
+assert(#api.contexts.gameplay.Mappings==0 and constructed==10)
+config.Ability1='Restored'
+api:Configure(config)
+assert(#api.contexts.gameplay.Mappings==1 and api.contexts.gameplay.Mappings[1].Action==original)
+assert(api.contexts.gameplay.Mappings[1].Key.KeyName=='Restored')
+print('PASS unbound slots: one/all empty, remaining shortcuts preserved and retained action can be rebound')
