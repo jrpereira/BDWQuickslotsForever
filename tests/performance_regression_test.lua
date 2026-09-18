@@ -13,11 +13,11 @@ dofile('tests/event_work_test.lua')
 local reconfigure=section('local function reconfigure_from_text(now)','local notificationOk,notificationError=')
 assert(load([[
 local BINDING_GROUPS={"Ability","Consumable"}
-local Config={Enabled=1,RemoveDefinedActionBindings=0}
+local Config={Enabled=1}
 local Enhanced={ready=true}
 local WheelLayout={RestoreAll=function() return true end}
 local restarted,closeCalls=0,0
-local function load_config(_) return {Enabled=0,RemoveDefinedActionBindings=0} end
+local function load_config(_) return {Enabled=0} end
 local function valid(_) return false end
 local function live_subsystem() return nil end
 local function clear_bridge_bindings() closeCalls=closeCalls+1; return false,"still-owned subscription" end
@@ -33,10 +33,10 @@ print("PASS: failed Close prevents restart")
 ]],"restart-review"))()
 assert(load([[
 local BINDING_GROUPS={"Ability","Consumable"}
-local Config={Enabled=1,RemoveDefinedActionBindings=0,ShowBothWheels=1}
+local Config={Enabled=1,ShowBothWheels=1}
 local Enhanced={ready=true}
 local closeCalls=0
-local function load_config(_) return {Enabled=1,RemoveDefinedActionBindings=0,ShowBothWheels=0} end
+local function load_config(_) return {Enabled=1,ShowBothWheels=0} end
 local function valid(_) return false end
 local function live_subsystem() return nil end
 local function clear_bridge_bindings() closeCalls=closeCalls+1; return true end

@@ -5,7 +5,7 @@ local jobs,hooks,created={},{},{}
 local input,hud,cleanup=0,0,0
 local hudObject={}
 local delays={}
-local e={VisualEpoch=0,Config={Enabled=1,RemoveDefinedActionBindings=0},Enhanced={ready=false},scripts='Scripts',
+local e={VisualEpoch=0,Config={Enabled=1},Enhanced={ready=false},scripts='Scripts',
   ExecuteInGameThread=function(fn) jobs[#jobs+1]=fn end,
   log=function() end,valid=function(o) return o~=nil end,fullname=function() return 'hud' end,
   ShortcutTargets={GetHUD=function()return hudObject end,SetHUD=function()end,Invalidate=function()end},

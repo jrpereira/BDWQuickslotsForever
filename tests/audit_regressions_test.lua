@@ -43,19 +43,19 @@ do
   local f=assert(io.open('Scripts/main.lua'));local source=f:read('*a');f:close()
   local a=assert(source:find('local function reconfigure_from_text(now)',1,true))
   local b=assert(source:find('local notificationOk,notificationError=',a,true))
-  local old={Enabled=1,RemoveDefinedActionBindings=1,Ability1=49,ShowBothWheels=1}
-  local new={Enabled=1,RemoveDefinedActionBindings=0,Ability1=50,ShowBothWheels=0}
+  local old={Enabled=1,Ability1=49,ShowBothWheels=1}
+  local new={Enabled=1,Ability1=50,ShowBothWheels=0}
   local fail=true;local closes,input,hud,inventory,suppress=0,0,0,0,0
   local e=setmetatable({Config=old,LastConfigText='old',BINDING_GROUPS={'Ability','Consumable'},
     Enhanced={ready=true},load_config=function(text)return text=='old' and old or new end,
     valid=function()return false end,live_subsystem=function()end,
     clear_bridge_bindings=function()closes=closes+1;return true end,
     RequestSuppressionSnapshot=function()end,remove_native_conflicts=function()
-      suppress=suppress+1;if fail then error('temporary rebuild rejection')end;return true end,
+      suppress=suppress+1;return true end,
     FormatSetup={Invalidate=function()end},RecoveryWork={Invalidate=function()end,
       Request=function(_,name)assert(name=='hud');hud=hud+1 end},
     InventoryNavigation={Resume=function()inventory=inventory+1 end},
-    request_recovery=function()input=input+1 end,log=function()end}, {__index=_G})
+    request_recovery=function()input=input+1;if fail then error("temporary recovery rejection")end end,log=function()end}, {__index=_G})
   local apply=assert(load(source:sub(a,b-1)..'\nreturn reconfigure_from_text','actual-apply','t',e))()
   assert(not pcall(apply,'new') and e.LastConfigText=='old' and e.PendingConfigBaseline==old)
   fail=false;assert(apply('new'))
@@ -66,11 +66,11 @@ do
   e.load_config=function()return visual end
   assert(apply('visual'))
   assert(input==beforeInput and inventory==beforeInventory and suppress==beforeSuppress and hud==2)
-  local suppressionOnly={};for k,v in pairs(visual)do suppressionOnly[k]=v end
-  suppressionOnly.RemoveDefinedActionBindings=1;e.load_config=function()return suppressionOnly end
-  assert(apply('suppression'))
-  assert(input==beforeInput and inventory==beforeInventory and suppress==beforeSuppress+1 and hud==2,
-    'suppression-only changes must not wake input or wheel formatting')
+  local legacy={};for k,v in pairs(visual)do legacy[k]=v end
+  legacy.RemoveDefinedActionBindings=0;e.load_config=function()return legacy end
+  assert(apply('legacy option'))
+  assert(input==beforeInput and inventory==beforeInventory and suppress==beforeSuppress and hud==2,
+    'ignored legacy option must not wake input, suppression or wheel formatting')
   -- A dirty failed Apply must also reconcile a user's reversion to the last text.
   local callback;local calls=0
   dofile('Scripts/config_notifications.lua')({subscribe=function(_,fn)callback=fn end,

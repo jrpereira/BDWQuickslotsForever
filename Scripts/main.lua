@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.55
+-- QuickslotsForever v0.3.56
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.55"
+local VERSION="0.3.56"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -64,7 +64,7 @@ local BINDING_GROUPS={"Ability","Consumable"}
 local InitialText=readall(CONFIG_PATH) or ""
 local function load_config(text)
   local ini=parse_ini(text)
-  local c={Enabled=iv(ini,"General","Enabled",1),Preset=iv(ini,"General","Preset",1), HoldThresholdMs=iv(ini,"General","HoldThresholdMs",200), RemoveDefinedActionBindings=iv(ini,"General","RemoveDefinedActionBindings",1),
+  local c={Enabled=iv(ini,"General","Enabled",1),Preset=iv(ini,"General","Preset",1), HoldThresholdMs=iv(ini,"General","HoldThresholdMs",200),
     ShowBothWheels=iv(ini,"General","ShowBothWheels",1),ConsumablesX=iv(ini,"Position Modifiers","ConsumablesX",40),ConsumablesY=iv(ini,"Position Modifiers","ConsumablesY",-420),AbilitiesX=iv(ini,"Position Modifiers","AbilitiesX",20),AbilitiesY=iv(ini,"Position Modifiers","AbilitiesY",40),SwapAbilitiesWithConsumables=iv(ini,"Position Modifiers","SwapAbilitiesWithConsumables",0)}
   if c.HoldThresholdMs<50 then c.HoldThresholdMs=50 elseif c.HoldThresholdMs>1000 then c.HoldThresholdMs=1000 end
   for _,group in ipairs(BINDING_GROUPS) do
@@ -176,7 +176,7 @@ RequestSuppressionSnapshot=function(invalidate)
 end
 local function remove_native_conflicts()
   if not Suppression then return false end
-  if Config.Enabled==0 or Config.RemoveDefinedActionBindings==0 then
+  if Config.Enabled==0 then
     local restored=Suppression:Restore()
     SuppressionDirty={};SuppressionNeedsSnapshot=true
     return restored
@@ -923,7 +923,7 @@ do
   local okSuppressHook,suppressHookError=pcall(RegisterHook,
     '/Script/EnhancedInput.EnhancedInputSubsystemInterface:AddMappingContext',
     function(_,mappingContext)
-      if Config.Enabled==0 or Config.RemoveDefinedActionBindings==0 or not Suppression then return end
+      if Config.Enabled==0 or not Suppression then return end
       local context=unwrap(mappingContext)
       if valid(context) and (object_path(context) or ''):match('^/Game/') then
         Suppression:Invalidate(context)
@@ -982,7 +982,6 @@ local function reconfigure_from_text(now)
   end
 
   Config=updated
-  local suppressionChanged=retrying or updated.RemoveDefinedActionBindings~=previous.RemoveDefinedActionBindings
   local inputChanged=retrying or updated.Enabled~=previous.Enabled or updated.HoldThresholdMs~=previous.HoldThresholdMs
   for _,group in ipairs(BINDING_GROUPS) do for slot=1,4 do
     local field=group..slot
@@ -1006,7 +1005,7 @@ local function reconfigure_from_text(now)
   if updated.Enabled~=previous.Enabled and updated.Enabled~=0 then snapshot_inventory_navigation()
   elseif inputChanged and InventoryNavigation then InventoryNavigation:Resume() end
   if inputChanged then request_recovery() end
-  if suppressionChanged then
+  if retrying then
     RequestSuppressionSnapshot(true)
     assert(remove_native_conflicts()~=false,'Suppression update pending')
   end

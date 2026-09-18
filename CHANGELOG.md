@@ -5,6 +5,13 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.56
+
+- Always suppress conflicting native Quickslot and wheel-swap bindings while enabled; remove the separate menu option and ignore its legacy config value.
+- Retain native mapping restoration when disabling the whole mod.
+- Verified with 22 Lua suites, 12 runtime syntax checks, 19 Python tests, DMM metadata integration and configuration migration checks.
+- Known issues remain: an unbound slot can prevent all shortcuts from initializing; suppression restoration can use stale keys or fail after mapping reordering; travel may retain input-blocking state; indicator restoration records can accumulate. Native gameplay and FPS acceptance are unverified for this release.
+
 ## 0.3.55
 
 - Remove hook-counting instrumentation and the counter console command.

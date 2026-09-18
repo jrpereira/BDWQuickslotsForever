@@ -33,10 +33,10 @@ assert(not source:find('RestartCurrentMod',1,true),'master toggles must not lose
 local start=assert(source:find('local function reconfigure_from_text(now)',1,true))
 local stop=assert(source:find('local notificationOk,notificationError=',start,true))
 local state={ready=true};local closes,recoveries=0,0
-local env2=setmetatable({Config={Enabled=1,RemoveDefinedActionBindings=1},Enhanced=state,
+local env2=setmetatable({Config={Enabled=1},Enhanced=state,
  snapshot_inventory_navigation=function()end,
  BINDING_GROUPS={'Ability','Consumable'},LastConfigText='old',
- load_config=function(text)return {Enabled=text=='on' and 1 or 0,RemoveDefinedActionBindings=1}end,
+ load_config=function(text)return {Enabled=text=='on' and 1 or 0}end,
  NativeKeys={RestoreAll=function()return true end},WheelLayout={RestoreAll=function()return true end},
  PersistentInput={CloseInventory=function()end},Suppression={Restore=function()end},FormatSetup={Invalidate=function()end},RecoveryWork={Invalidate=function()end,Request=function()end},
  valid=function()return false end,live_subsystem=function()return nil end,
