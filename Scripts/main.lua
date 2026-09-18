@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.53
+-- QuickslotsForever v0.3.54
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.53"
+local VERSION="0.3.54"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -74,8 +74,6 @@ local function load_config(text)
       c[field.."Mode"]=iv(ini,"Bindings",field.."Mode",0)
     end
   end
-  c.DrawWeapon=iv(ini,"Bindings","DrawWeapon",0)
-  c.DrawWeaponMode=iv(ini,"Bindings","DrawWeaponMode",0)
   return c
 end
 local LastConfigText=readall(CONFIG_PATH) or InitialText
@@ -152,7 +150,6 @@ local SuppressionTargets={
   {action="IA_Quickslot_Top",row="player_quickslot_top"},
   {action="IA_Quickslot_Right",row="player_quickslot_right"},
   {action="IA_Quickslot_Bottom",row="player_quickslot_bottom"},
-  {action="IA_DrawToggleSword",row="combat_draw_weapon"},
   {action="IA_Combat_ToggleQuickslots",row="combat_toggle_quickslots"},
   {action="IA_OW_ToggleQuickslots",row="ow_toggle_quickslots"},
 }
@@ -342,7 +339,7 @@ do
     if Enhanced then
       Enhanced.generation=Enhanced.generation+1
       Enhanced.ready=false
-      Enhanced.sub=nil; Enhanced.playerInput=nil; Enhanced.inputComponent=nil; Enhanced.drawContext=nil
+      Enhanced.sub=nil; Enhanced.playerInput=nil; Enhanced.inputComponent=nil
     end
     if reset_world_visuals then reset_world_visuals() end
   end)
@@ -364,7 +361,7 @@ local function find_gameplay_stack()
   return nil,nil,nil,nil
 end
 
-Enhanced={ready=false,sub=nil,drawContext=nil,playerInput=nil,inputComponent=nil,inputComponentPath=nil,inputScope=nil,helperHandles={},actions={},generation=0,gameplayContextSignature=nil}
+Enhanced={ready=false,sub=nil,playerInput=nil,inputComponent=nil,inputComponentPath=nil,inputScope=nil,helperHandles={},actions={},generation=0,gameplayContextSignature=nil}
 local function live_subsystem()
   return get_live("EnhancedInputLocalPlayerSubsystem",function(o) return fullname(o):find("DWLocalPlayer",1,true)~=nil end) or get_live("EnhancedInputLocalPlayerSubsystem")
 end
@@ -373,25 +370,6 @@ local function live_player_input()
   return pi
 end
 local function cls(path) local ok,o=pcall(function() return StaticFindObject(path) end); return ok and valid(o) and o or nil end
-local function array_num(a)
-  if a==nil then return 0 end
-  local ok,n=pcall(function() return a:GetArrayNum() end)
-  if ok and tonumber(n) then return tonumber(n) end
-  local ok2,n2=pcall(function() return #a end)
-  return ok2 and (tonumber(n2) or 0) or 0
-end
-local function replace_only_trigger(action,trigger)
-  local triggers=safe(action,"Triggers")
-  if array_num(triggers)~=1 then return false,"cloned action does not contain exactly one trigger slot" end
-  local replaced=false
-  local ok=pcall(function()
-    triggers:ForEach(function(_,entry)
-      if not replaced then entry:set(trigger); replaced=true end
-    end)
-  end)
-  if not ok or not replaced then return false,"UE4SS could not replace the cloned trigger slot" end
-  return true
-end
 local function bridge_api()
   local bridge=rawget(_G,"UE4SSLuaEventBridge")
   if type(bridge)~="table" or type(bridge.GetCapabilities)~="function" then
@@ -471,7 +449,7 @@ Suppression=dofile(scripts.."/runtime_suppression.lua")({
   each=function(c,fn) assert(each_container(c,function(i,v) fn(i,unwrap(v)) end),"Mapping access failed") end,
   owned=function(c)
     -- Native assets live under /Game; preserve all transient mod contexts,
-    -- including native-action inventory and Draw Weapon mappings.
+    -- including native-action inventory mappings.
     return PersistentInput:Owns(c) or not (object_path(c) or ""):match("^/Game/")
   end,
   load=function() return ModRef:GetSharedVariable("QuickslotsForever.SuppressionFields.v1") end,
@@ -544,120 +522,20 @@ local function bind_bridge_actions(input,sub,defs)
   Enhanced.actions=defs
   return true
 end
-local function find_loaded_action(fragment)
-  local ok,objs=pcall(function() return FindAllOf("InputAction") end)
-  if not ok or not objs then return nil end
-  for _,action in ipairs(objs) do
-    if valid(action) and fullname(action):find(fragment,1,true) then return action end
-  end
-end
-local function make_trigger(outer,mode,continuous)
-  local triggerPath=(mode==1) and "/Script/EnhancedInput.InputTriggerHold" or "/Script/EnhancedInput.InputTriggerTap"
-  local triggerClass=cls(triggerPath)
-  if not valid(triggerClass) then return nil,triggerPath.." class unavailable" end
-  local okt,trigger=pcall(function() return StaticConstructObject(triggerClass,outer) end)
-  if not okt or not valid(trigger) then return nil,"could not construct native action trigger" end
-  pcall(function()
-    if mode==1 then
-      trigger.HoldTimeThreshold=Config.HoldThresholdMs/1000.0
-      trigger.bIsOneShot=not continuous
-    else
-      trigger.TapReleaseTimeThreshold=Config.HoldThresholdMs/1000.0
-    end
-  end)
-  return trigger
-end
-local function find_mapping_context_template()
-  local ok,contexts=pcall(function() return FindAllOf("InputMappingContext") end)
-  if not ok or not contexts then return nil end
-  for _,context in ipairs(contexts) do
-    if valid(context) and not fullname(context):find("QuickslotsForever",1,true) then
-      local found=false
-      each_container(safe(context,"Mappings"),function(_,mp)
-        local mapping=unwrap(mp)
-        if mapping and array_num(safe(mapping,"Triggers"))==1 then found=true end
-      end)
-      if found then return context end
-    end
-  end
-end
-local function configure_cloned_draw_context(sub,action,key,mode)
-  local template=find_mapping_context_template()
-  if not valid(template) then return nil,"no loaded mapping context with one reusable trigger slot" end
-  local contextClass=cls("/Script/EnhancedInput.InputMappingContext")
-  local ok,context=pcall(function() return StaticConstructObject(contextClass,sub,0,0,0,false,false,template) end)
-  if not ok or not valid(context) then return nil,"could not clone mapping context template" end
-  local chosen=nil; local removals={}
-  each_container(safe(context,"Mappings"),function(_,mp)
-    local mapping=unwrap(mp)
-    if mapping then
-      local oldAction=safe(mapping,"Action"); local oldKey=safe(mapping,"Key")
-      if not chosen and array_num(safe(mapping,"Triggers"))==1 then
-        chosen=mapping
-      else
-        removals[#removals+1]={action=oldAction,key=oldKey}
-      end
-    end
-  end)
-  if not chosen then return nil,"cloned context lost its reusable trigger slot" end
-  local trigger,triggerErr=make_trigger(context,mode,false)
-  if not valid(trigger) then return nil,triggerErr end
-  local replaced,replaceErr=replace_only_trigger(chosen,trigger)
-  if not replaced then return nil,replaceErr end
-  pcall(function()
-    chosen.Action=action
-    chosen.Key={KeyName=FName(key)}
-    chosen.PlayerMappableKeySettings=nil
-    chosen.SettingBehavior=2
-    local modifiers=safe(chosen,"Modifiers"); if modifiers then modifiers:Empty() end
-  end)
-  for _,r in ipairs(removals) do
-    if valid(r.action) and r.key~=nil then pcall(function() context:UnmapKey(r.action,r.key) end) end
-  end
-  log("Draw Weapon mapping template: "..fullname(template))
-  return context
-end
-local function map_native_draw(sub)
-  local key=VK_TO_FKEY[Config.DrawWeapon]
-  if not key then return false,"unsupported FKey for DrawWeapon" end
-  local action=find_loaded_action("IA_DrawToggleSword")
-  if not valid(action) then return false,"IA_DrawToggleSword is not loaded yet" end
-  local context,err=configure_cloned_draw_context(sub,action,key,Config.DrawWeaponMode or 0)
-  if not valid(context) then return nil,"IA_DrawToggleSword: "..tostring(err) end
-  log("Draw Weapon mapped directly to native IA_DrawToggleSword on "..key.." with an Enhanced Input "..(((Config.DrawWeaponMode or 0)==1) and "Hold" or "Tap").." trigger.")
-  return context
-end
-local ContextRegistry=dofile(scripts.."/context_registry.lua")({
-  get_shared=function(key) return ModRef:GetSharedVariable(key) end,
-  set_shared=function(key,value) ModRef:SetSharedVariable(key,value) end,
-  path=object_path,resolve=native_action,valid=valid,
-  remove=function(sub,context)
-    sub:RemoveMappingContext(context,{bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false})
-  end,
-})
-ContextRegistry:ForgetLegacy()
-local function clear_old_context(sub)
-  local ok,cleared,err=pcall(function() return ContextRegistry:Clear(sub) end)
-  if not ok then return false,tostring(cleared) end
-  return cleared,err
-end
-local function gameplay_context_signature(playerInput,drawContext)
+local function gameplay_context_signature(playerInput)
   if not valid(playerInput) then return "<no-player-input>" end
   local contexts={}
-  local drawName=valid(drawContext) and fullname(drawContext) or nil
-  local drawPresent=false
   each_container(safe(playerInput,"AppliedInputContexts"),function(k,_)
     local context=unwrap(k)
     if valid(context) then
       local name=fullname(context)
-      if name==drawName then drawPresent=true end
       if name:find("IMC_OW.",1,true) or name:find("IMC_RTCombat.",1,true) then
         contexts[#contexts+1]=name
       end
     end
   end)
   table.sort(contexts)
-  return (#contexts>0 and table.concat(contexts,"|") or "<no-gameplay-routing-context>"),drawPresent
+  return (#contexts>0 and table.concat(contexts,"|") or "<no-gameplay-routing-context>")
 end
 local function setup_enhanced_input()
   if Enhanced.ready then return true end
@@ -672,8 +550,6 @@ local function setup_enhanced_input()
   Enhanced.bridgeError=nil
   local cleared,clearErr=clear_bridge_bindings()
   if not cleared then log("Enhanced Input: "..tostring(clearErr)); return false end
-  local contextCleared,contextError=clear_old_context(sub)
-  if not contextCleared then log("Draw context cleanup pending: "..tostring(contextError)); return false end
   SuppressionNeedsSnapshot=true
   Enhanced.controller,Enhanced.pawn=pc,pawn
   Enhanced.sub,Enhanced.playerInput,Enhanced.inputComponent=sub,pi,input
@@ -690,28 +566,7 @@ local function setup_enhanced_input()
     log("Enhanced Input helper binding failed: "..tostring(bindErr))
     return false
   end
-  local drawContext,drawErr=map_native_draw(sub)
-  if not valid(drawContext) then
-    clear_bridge_bindings()
-    log("Enhanced Input: "..tostring(drawErr))
-    return false
-  end
-  Enhanced.drawContext=drawContext
-  local remembered,rememberError=pcall(function() ContextRegistry:Remember(drawContext,sub) end)
-  if not remembered then
-    clear_bridge_bindings()
-    Enhanced.drawContext=nil
-    log("Draw context registration failed: "..tostring(rememberError))
-    return false
-  end
   remove_native_conflicts(nil,nil)
-  local options={bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false}
-  local okdraw,drawAddErr=pcall(function() sub:AddMappingContext(drawContext,10001,options) end)
-  if not okdraw then
-    clear_bridge_bindings()
-    log("AddMappingContext failed for Draw Weapon: "..tostring(drawAddErr))
-    return false
-  end
   Enhanced.gameplayContextSignature=gameplay_context_signature(pi)
   Enhanced.ready=true
   if RecoveryWork then
@@ -719,26 +574,7 @@ local function setup_enhanced_input()
     RecoveryWork:AfterReady('cleanup')
   end
   sync_blocking_widgets_once()
-  log(string.format("Enhanced Input ready on %s: %d persistent action bindings + native Draw Weapon, Tap/Hold threshold=%d ms, gameplay routing=%s.",Enhanced.inputComponentPath or "<unknown>",#Enhanced.actions,Config.HoldThresholdMs,Enhanced.gameplayContextSignature))
-  return true
-end
-local function context_present(ctx)
-  if not valid(ctx) or not valid(Enhanced.playerInput) then return false end
-  local contextName=fullname(ctx)
-  local present=false
-  each_container(safe(Enhanced.playerInput,"AppliedInputContexts"),function(k,_)
-    local key=unwrap(k)
-    if valid(key) and fullname(key)==contextName then present=true end
-  end)
-  return present
-end
-local function ensure_context(ctx,priority,label,knownPresent)
-  if knownPresent==true or (knownPresent==nil and context_present(ctx)) then return true end
-  if not valid(ctx) or not valid(Enhanced.sub) then return false end
-  local options={bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false}
-  local ok,e=pcall(function() Enhanced.sub:AddMappingContext(ctx,priority,options) end)
-  if not ok then log("Enhanced Input context restore failed: "..label..": "..tostring(e)); return false end
-  log("Enhanced Input context restored: "..label)
+  log(string.format("Enhanced Input ready on %s: %d persistent Quickslot action bindings, Tap/Hold threshold=%d ms, gameplay routing=%s.",Enhanced.inputComponentPath or "<unknown>",#Enhanced.actions,Config.HoldThresholdMs,Enhanced.gameplayContextSignature))
   return true
 end
 local DisabledContextCleaned=false
@@ -766,17 +602,15 @@ local function enhanced_input_step()
             local closed=clear_bridge_bindings()
             if closed then Enhanced.ready=false else return false end
           else
-            local currentSignature,drawPresent=gameplay_context_signature(liveInput,Enhanced.drawContext)
+            local currentSignature=gameplay_context_signature(liveInput)
             Enhanced.gameplayContextSignature=currentSignature
-            if not ensure_context(Enhanced.drawContext,10001,"Draw Weapon",drawPresent) then return false end
             PersistentInput:EnsureGameplay(Enhanced.sub)
           end
         end
         if not Enhanced.ready then return setup_enhanced_input() end
       elseif not DisabledContextCleaned then
         local closed=clear_bridge_bindings()
-        local sub=live_subsystem()
-        if closed and valid(sub) then DisabledContextCleaned=clear_old_context(sub)==true end
+        DisabledContextCleaned=closed==true
       end
   return Config.Enabled==0 or Enhanced.ready
 end
@@ -1139,10 +973,8 @@ local function reconfigure_from_text(now)
     end
     local restored,restoreError=WheelLayout:RestoreAll()
     if not restored then log("GUI restoration pending before disable: "..tostring(restoreError)); return false end
-    local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
     if not clear_bridge_bindings() then return false end
     Enhanced.ready=false
-    if not clear_old_context(sub) then return false end
     PersistentInput:CloseInventory()
     Suppression:Restore()
     if RecoveryWork then RecoveryWork:Invalidate() end
@@ -1152,19 +984,15 @@ local function reconfigure_from_text(now)
   Config=updated
   local suppressionChanged=retrying or updated.RemoveDefinedActionBindings~=previous.RemoveDefinedActionBindings
   local inputChanged=retrying or updated.Enabled~=previous.Enabled or updated.HoldThresholdMs~=previous.HoldThresholdMs
-      or updated.DrawWeapon~=previous.DrawWeapon or updated.DrawWeaponMode~=previous.DrawWeaponMode
   for _,group in ipairs(BINDING_GROUPS) do for slot=1,4 do
     local field=group..slot
     if updated[field]~=previous[field] or updated[field.."Mode"]~=previous[field.."Mode"] then inputChanged=true end
   end end
   if inputChanged and RecoveryWork then RecoveryWork:Invalidate() end
   if inputChanged and Enhanced.ready then
-    local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
     local closed=clear_bridge_bindings()
     Enhanced.ready=false
     if closed then
-      if valid(sub) then clear_old_context(sub) end
-      Enhanced.drawContext=nil
       Enhanced.actions={}
     else
       log("Committed config change is waiting for helper cleanup before input can be rebuilt.")

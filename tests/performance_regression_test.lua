@@ -21,7 +21,6 @@ local function load_config(_) return {Enabled=0,RemoveDefinedActionBindings=0} e
 local function valid(_) return false end
 local function live_subsystem() return nil end
 local function clear_bridge_bindings() closeCalls=closeCalls+1; return false,"still-owned subscription" end
-local function clear_old_context() error("unexpected") end
 local function RestartCurrentMod() restarted=restarted+1 end
 local function log(_) end
 local FormatSetup={Invalidate=function()end}

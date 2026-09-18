@@ -62,3 +62,12 @@ config.ini
 !.env.example
 !.env.sample
 !distribution/config.ini
+
+# Developer diagnostics and historical evidence stay private.
+/tools/runtime_evidence.py
+/tests/test_runtime_evidence.py
+/docs/RECONSTRUCTED_HISTORY.json
+/Scripts/input_diagnostics.lua
+/tests/input_diagnostics_test.lua
+/Scripts/hook_stats.lua
+/tests/hook_stats_test.lua

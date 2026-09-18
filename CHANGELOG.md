@@ -5,6 +5,16 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.54
+
+- Focus the mod on ability/consumable Quickslots and wheel handling.
+- Remove the unrelated input context and menu subsection.
+- Keep suppression limited to the six recognized Quickslot and wheel-swap actions.
+- Upgrade in a fresh game process; prior runtime mappings are not hot-migrated.
+- Verified with 23 Lua suites, 13 runtime syntax checks, 20 Python tests,
+  real Mod Menu metadata integration and configuration migration tests.
+  Native gameplay and FPS acceptance remain unverified for this version.
+
 ## 0.3.53
 
 - Preserve input subscriptions across routing-only changes; rebind when their

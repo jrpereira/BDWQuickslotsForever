@@ -8,7 +8,6 @@
     "Scripts/persistent_input.lua": "Scripts/persistent_input.lua",
     "Scripts/runtime_suppression.lua": "Scripts/runtime_suppression.lua",
     "Scripts/action_indicators.lua": "Scripts/action_indicators.lua",
-    "Scripts/context_registry.lua": "Scripts/context_registry.lua",
     "Scripts/wheel_layout.lua": "Scripts/wheel_layout.lua",
     "Scripts/object_paths.lua": "Scripts/object_paths.lua",
     "Scripts/event_work.lua": "Scripts/event_work.lua",

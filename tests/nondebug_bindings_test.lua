@@ -3,7 +3,7 @@ assert(loadfile("Scripts/main.lua"))
 assert(not source:find("INPUT TRACE",1,true) and not source:find("INPUT SNAPSHOT",1,true))
 assert(not source:find("input_diagnostics.lua",1,true))
 local first=assert(source:find("local function bind_bridge_actions(",1,true))
-local last=assert(source:find("local function find_loaded_action(",first,true))
+local last=assert(source:find("local function gameplay_context_signature(",first,true))
 local bindings,dispatches,logs={},{},{}
 local bridge={}
 local configured

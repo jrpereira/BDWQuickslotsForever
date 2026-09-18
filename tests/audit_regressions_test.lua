@@ -49,7 +49,7 @@ do
   local e=setmetatable({Config=old,LastConfigText='old',BINDING_GROUPS={'Ability','Consumable'},
     Enhanced={ready=true},load_config=function(text)return text=='old' and old or new end,
     valid=function()return false end,live_subsystem=function()end,
-    clear_bridge_bindings=function()closes=closes+1;return true end,clear_old_context=function()return true end,
+    clear_bridge_bindings=function()closes=closes+1;return true end,
     RequestSuppressionSnapshot=function()end,remove_native_conflicts=function()
       suppress=suppress+1;if fail then error('temporary rebuild rejection')end;return true end,
     FormatSetup={Invalidate=function()end},RecoveryWork={Invalidate=function()end,
@@ -78,19 +78,5 @@ do
     current=function()return '[General]\n[Bindings]' end,dirty=function()return true end,
     apply=function()calls=calls+1;return true end,log=function()end})
   callback();assert(calls==1,'dirty configuration must not be skipped on equal text')
-end
-do
-  local f=assert(io.open('Scripts/main.lua'));local source=f:read('*a');f:close()
-  local a=assert(source:find('local function ensure_context(',1,true))
-  local b=assert(source:find('local DisabledContextCleaned=',a,true))
-  local adds,rebuilds=0,0
-  local e=setmetatable({valid=function(o)return o~=nil end,context_present=function()return false end,
-    log=function()end,Enhanced={sub={AddMappingContext=function(_,_,_,options)
-      assert(options.bForceImmediately);adds=adds+1 end,
-      RequestRebuildControlMappings=function()rebuilds=rebuilds+1 end}}}, {__index=_G})
-  local ensure=assert(load(source:sub(a,b-1)..'\nreturn ensure_context','actual-context-restore','t',e))()
-  assert(ensure({},10000,'test',false) and adds==1 and rebuilds==0,
-    'force-immediate context addition must not issue an extra rebuild request')
-  assert(ensure({},10000,'test',true) and adds==1,'already present context must remain untouched')
 end
 print('PASS audit regressions: independent retries, navigation cleanup, pending replacement, failed Apply recovery and scoped visual Apply')

@@ -40,7 +40,7 @@ local env2=setmetatable({Config={Enabled=1,RemoveDefinedActionBindings=1},Enhanc
  NativeKeys={RestoreAll=function()return true end},WheelLayout={RestoreAll=function()return true end},
  PersistentInput={CloseInventory=function()end},Suppression={Restore=function()end},FormatSetup={Invalidate=function()end},RecoveryWork={Invalidate=function()end,Request=function()end},
  valid=function()return false end,live_subsystem=function()return nil end,
- clear_bridge_bindings=function()closes=closes+1;return true end,clear_old_context=function()return true end,
+ clear_bridge_bindings=function()closes=closes+1;return true end,
  reset_world_visuals=function()end,request_recovery=function()recoveries=recoveries+1 end,log=function()end}, {__index=_G})
 local apply=assert(load(source:sub(start,stop-1)..'\nreturn reconfigure_from_text','apply-in-place','t',env2))()
 assert(apply('off') and env2.Config.Enabled==0 and not state.ready)

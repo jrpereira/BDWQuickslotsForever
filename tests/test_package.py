@@ -29,7 +29,8 @@ class PackageTests(unittest.TestCase):
                 self.assertIn(pack.MODULE + '/enabled.txt', names)
                 self.assertNotIn(pack.MODULE + '/Scripts/temporary_probe.lua', names)
                 self.assertNotIn(pack.MODULE + '/Scripts/controls_rows.lua', names)
-                self.assertEqual(len([n for n in names if '/Scripts/' in n]), 13)
+                self.assertNotIn(pack.MODULE + '/Scripts/hook_stats.lua', names)
+                self.assertEqual(len([n for n in names if '/Scripts/' in n]), 12)
                 self.assertFalse(any(n.endswith('/config.ini') or n.endswith('.dmp') or '/tests/' in n for n in names))
                 if pack.MODULE == 'QuickslotsForever':
                     self.assertEqual(bundle.read(pack.MODULE + '/config.example.ini'), (root / 'distribution/config.ini').read_bytes())
