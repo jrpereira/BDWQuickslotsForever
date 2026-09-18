@@ -10,6 +10,10 @@ return function(env)
     local t=env.safe(env.safe(w,"RenderTransform"),"Translation")
     return {X=number(t,"X"),Y=number(t,"Y")}
   end
+  local function set_translation(w,x,y)
+    local current=translation(w)
+    if current.X~=x or current.Y~=y then w:SetRenderTranslation({X=x,Y=y}) end
+  end
   local function slot_state(w)
     local slot=env.safe(w,"Slot")
     local p=env.safe(slot,"Padding")
@@ -61,11 +65,16 @@ return function(env)
       for id,p in pairs(prompts) do if not env.valid(p.widget) then prompts[id]=nil end end
       local id=env.fullname(w)
       if not prompts[id] then prompts[id]={widget=w,opacity=assert(tonumber(w:GetRenderOpacity()))} end
-      w:SetRenderOpacity(0.0)
+      if w:GetRenderOpacity()~=0.0 then w:SetRenderOpacity(0.0) end
     end)
   end
   function api:RestoreAll()
     return pcall(function() restore_layout(); restore_prompts() end)
+  end
+  function api:Forget()
+    -- World teardown: drop wrappers without dereferencing the departing tree.
+    record=nil
+    prompts={}
   end
   function api:Update(hud,switcher,ability,consumable,showBoth,ax,ay,cx,cy)
     local ok,err=pcall(function()
@@ -97,9 +106,9 @@ return function(env)
       end
       -- Consumables stays in the native switcher; the ability wheel is its sibling.
       if switcher:GetActiveWidgetIndex()~=0 then switcher:SetActiveWidget(consumable) end
-      ability:SetRenderTranslation({X=ax,Y=ay})
-      consumable:SetRenderTranslation({X=0,Y=0})
-      switcher:SetRenderTranslation({X=cx,Y=cy})
+      set_translation(ability,ax,ay)
+      set_translation(consumable,0,0)
+      set_translation(switcher,cx,cy)
     end)
     if not ok and record then pcall(restore_layout) end
     return ok,err

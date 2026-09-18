@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.35
+-- QuickslotsForever v0.3.44-native.1
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.35"
+local VERSION="0.3.44-native.1"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -42,7 +42,7 @@ local VK_TO_FKEY={
  [0x09]="Tab",[0x20]="SpaceBar",[0x21]="PageUp",[0x22]="PageDown",[0x23]="End",[0x24]="Home",[0x25]="Left",[0x26]="Up",[0x27]="Right",[0x28]="Down",[0x2D]="Insert",[0x2E]="Delete",[0xDC]="Backslash",[0xBA]="Semicolon",[0xBB]="Equals",[0xBC]="Comma",[0xBD]="Hyphen",[0xBE]="Period",[0xBF]="Slash",[0xC0]="Tilde",[0xDB]="LeftBracket",[0xDD]="RightBracket",[0xDE]="Apostrophe",
 }
 local function key_label(vk)
-  local mouse={[1]="Mouse 1",[2]="Mouse 2",[4]="Mouse 3",[5]="Mouse 4",[6]="Mouse 5"}
+  local mouse={[1]="M1",[2]="M2",[4]="M3",[5]="M4",[6]="M5"}
   if mouse[vk] then return mouse[vk] end
   if vk>=48 and vk<=57 then return string.char(vk) end
   if vk>=65 and vk<=90 then return string.char(vk) end
@@ -64,7 +64,7 @@ local BINDING_GROUPS={"Ability","Consumable"}
 local InitialText=readall(CONFIG_PATH) or ""
 local function load_config(text)
   local ini=parse_ini(text)
-  local c={Enabled=iv(ini,"General","Enabled",1),Preset=iv(ini,"General","Preset",1), HoldThresholdMs=iv(ini,"General","HoldThresholdMs",200), RemoveDefinedActionBindings=iv(ini,"General","RemoveDefinedActionBindings",0),
+  local c={Enabled=iv(ini,"General","Enabled",1),Preset=iv(ini,"General","Preset",1), HoldThresholdMs=iv(ini,"General","HoldThresholdMs",200), RemoveDefinedActionBindings=iv(ini,"General","RemoveDefinedActionBindings",1),
     ShowBothWheels=iv(ini,"General","ShowBothWheels",1),ConsumablesX=iv(ini,"Position Modifiers","ConsumablesX",40),ConsumablesY=iv(ini,"Position Modifiers","ConsumablesY",-420),AbilitiesX=iv(ini,"Position Modifiers","AbilitiesX",20),AbilitiesY=iv(ini,"Position Modifiers","AbilitiesY",40),SwapAbilitiesWithConsumables=iv(ini,"Position Modifiers","SwapAbilitiesWithConsumables",0)}
   if c.HoldThresholdMs<50 then c.HoldThresholdMs=50 elseif c.HoldThresholdMs>1000 then c.HoldThresholdMs=1000 end
   for _,group in ipairs(BINDING_GROUPS) do
@@ -81,6 +81,16 @@ end
 local LastConfigText=readall(CONFIG_PATH) or InitialText
 local Config=load_config(LastConfigText)
 local Enhanced
+local PersistentInput
+local Suppression
+local sync_inventory_context
+local RecoveryWork
+local reset_world_visuals
+local function request_recovery()
+  if not RecoveryWork then return end
+  if Config.Enabled~=0 then RecoveryWork:Request('input'); RecoveryWork:Request('hud') end
+  if Config.RemoveDefinedActionBindings~=0 then RecoveryWork:Request('cleanup') end
+end
 
 -- Gameplay input classification remains owned by Unreal Enhanced Input.
 local function get_live(class,predicate)
@@ -106,13 +116,6 @@ end
 local function consumable_widget() return get_live("WBP_HUD_Quickslots_C",function(o) return valid(safe(o,"Left")) end) end
 local function bind_overlay() return get_live("WBP_Inventory_QuickslotBindOverlay_C",function(o) local ok,v=pcall(function() return o:IsActivated() end); return ok and v==true end) end
 local function trigger_consumable(slot)
-  local ov=bind_overlay()
-  if valid(ov) then
-    local target=fullname(ov)
-    local ok,e=pcall(function() ov:BindItemToQuickslot(slot-1) end)
-    if not ok then return false,"BindItemToQuickslot failed for "..target..": "..tostring(e) end
-    return true,"BindItemToQuickslot("..tostring(slot-1)..") on "..target
-  end
   local w=consumable_widget()
   local b=valid(w) and safe(w,SLOT_WIDGET[slot]) or nil
   if not valid(b) then return false,"no live consumable button for slot "..slot end
@@ -143,375 +146,39 @@ local function each_container(c,fn)
   local ok=pcall(function() c:ForEach(function(k,v) fn(k,v) end) end)
   return ok
 end
-local function input_settings(sub)
-  -- Resolve settings from the active local-player subsystem first. FindAllOf
-  -- can return an initialized-looking RebelEnhancedInputUserSettings object
-  -- that is not the profile actually used by this local player.
-  local activeSub=valid(sub) and sub or (Enhanced and valid(Enhanced.sub) and Enhanced.sub or nil)
-  if valid(activeSub) then
-    local ok,s=pcall(function() return activeSub:GetUserSettings() end)
-    if ok and valid(s) then return s,"local-player subsystem" end
-  end
-  local ok,objs=pcall(function() return FindAllOf("RebelEnhancedInputUserSettings") end)
-  if not ok or not objs then return nil,"FindAllOf unavailable" end
-  for _,o in ipairs(objs) do if valid(o) and fullname(o):find("/Engine/Transient.",1,true) and not fullname(o):find("Default__",1,true) then return o,"transient fallback" end end
-  return nil,"no live user settings"
-end
-local function collect_mappings(profile)
-  local result={}; local ok,rows=pcall(function() return profile:GetPlayerMappingRows() end); if not ok or rows==nil then return result,false end
-  local scanned=each_container(rows,function(rowName,rp)
-    local row=unwrap(rp); local mappings=row and safe(row,"Mappings") or nil
-    each_container(mappings,function(_,mp)
-      local m=unwrap(mp); if m then
-        -- The TMap row key is authoritative. Some game builds expose a
-        -- duplicated MappingName field as an empty/None FName.
-        local name=safe(m,"MappingName")
-        local nameText=fname_string(name):lower()
-        if name==nil or nameText=="" or nameText=="none" then name=unwrap(rowName) end
-        result[#result+1]={
-          MappingName=name,
-          Slot=safe(m,"Slot"),
-          CurrentKey=safe(m,"CurrentKey"),
-          HardwareDeviceId=safe(m,"HardwareDeviceId"),
-          AssociatedInputAction=safe(m,"AssociatedInputAction")
-        }
-      end
-    end)
-  end)
-  return result,scanned
-end
-local function mapping_key_name(m)
-  local k=m and m.CurrentKey; if k==nil then return "" end
-  return fname_string(k.KeyName)
-end
-local function mapping_name(m) return fname_string(m and m.MappingName) end
+-- Explicit native-action suppression allowlist. Do not infer unverified aliases.
+local SuppressionTargets={
+  {action="IA_Quickslot_Left",row="player_quickslot_left"},
+  {action="IA_Quickslot_Top",row="player_quickslot_top"},
+  {action="IA_Quickslot_Right",row="player_quickslot_right"},
+  {action="IA_Quickslot_Bottom",row="player_quickslot_bottom"},
+  {action="IA_DrawToggleSword",row="combat_draw_weapon"},
+  {action="IA_Combat_ToggleQuickslots",row="combat_toggle_quickslots"},
+  {action="IA_OW_ToggleQuickslots",row="ow_toggle_quickslots"},
+}
 local function action_is_defined_here(action)
   if not valid(action) then return false end
-  local n=fullname(action)
-  return n:find("IA_Quickslot_Left",1,true)
-      or n:find("IA_Quickslot_Top",1,true)
-      or n:find("IA_Quickslot_Right",1,true)
-      or n:find("IA_Quickslot_Bottom",1,true)
-      or n:find("IA_DrawToggleSword",1,true)
-      or n:find("IA_Combat_ToggleQuickslots",1,true)
-      or n:find("IA_OW_ToggleQuickslots",1,true)
+  local name=fullname(action):match("([^%.:/%s]+)$")
+  for _,target in ipairs(SuppressionTargets) do if name==target.action then return true end end
+  return false
 end
 local function mapping_name_is_defined_here(n)
-  n=tostring(n or ""):lower():gsub("[%s_%-]","")
-  local allowed={
-    playerquickslotleft=true,playerquickslottop=true,playerquickslotright=true,playerquickslotbottom=true,
-    combatdrawweapon=true,combattogglequickslots=true,owtogglequickslots=true,
-    iaquickslotleft=true,iaquickslottop=true,iaquickslotright=true,iaquickslotbottom=true,
-    iadrawtogglesword=true,iacombattogglequickslots=true,iaowtogglequickslots=true,
-  }
-  return allowed[n]==true
+  local function normalize(value) return tostring(value or ""):lower():gsub("[%s_%-]","") end
+  n=normalize(n)
+  for _,target in ipairs(SuppressionTargets) do
+    if (target.row and n==normalize(target.row)) or n==normalize(target.action) then return true end
+  end
+  return false
 end
-local function active_contexts(pi)
-  local out={}; local map=valid(pi) and safe(pi,"AppliedInputContexts") or nil
-  each_container(map,function(k,_)
-    local c=unwrap(k); if valid(c) then out[#out+1]=c end
+local function remove_native_conflicts()
+  if not Suppression then return false end
+  if Config.Enabled==0 or Config.RemoveDefinedActionBindings==0 then return Suppression:Restore() end
+  if not Enhanced or not valid(Enhanced.playerInput) then return false end
+  local contexts={}
+  each_container(safe(Enhanced.playerInput,"AppliedInputContexts"),function(k)
+    local c=unwrap(k);if valid(c) then contexts[#contexts+1]=c end
   end)
-  return out
-end
-local function target_contexts(pi)
-  local out,seen={},{}
-  local function add(ctx)
-    if not valid(ctx) then return end
-    local n=fullname(ctx); if seen[n] then return end
-    local targets={}; local maps=safe(ctx,"Mappings")
-    each_container(maps,function(_,mp)
-      local m=unwrap(mp); local action=m and safe(m,"Action") or nil
-      if valid(action) and action_is_defined_here(action) then targets[#targets+1]=fullname(action) end
-    end)
-    if #targets>0 then seen[n]=true; out[#out+1]={context=ctx,name=n,targets=targets} end
-  end
-  for _,ctx in ipairs(active_contexts(pi)) do add(ctx) end
-  local ok,objs=pcall(function() return FindAllOf("InputMappingContext") end)
-  if ok and objs then for _,ctx in ipairs(objs) do add(ctx) end end
-  return out
-end
-local function mapping_key(m)
-  local k=m and safe(m,"Key"); if not k then return "" end
-  return fname_string(safe(k,"KeyName"))
-end
-local PersistentCleanupDone=false
-local PersistentCleanupAttempts=0
-local PersistentCleanupStage=""
-local PersistentCleanupSettingsName=""
-local RegisteredNativeContexts={}
-local ReportedControlTargets={}
-local RebelCleanupObjectName=""
-local function cleanup_stage(s)
-  if s~=PersistentCleanupStage then PersistentCleanupStage=s; log("Persistent controls cleanup: "..s) end
-end
-local function register_native_contexts_with_settings(settings,pi)
-  local added=0
-  for _,entry in ipairs(target_contexts(pi)) do
-    local ctx=entry.context
-    local n=fullname(ctx)
-    for _,actionName in ipairs(entry.targets) do
-      local reportKey=n.."|"..actionName
-      if not ReportedControlTargets[reportKey] then
-        ReportedControlTargets[reportKey]=true
-        log("Controls removal target: "..actionName.." in "..n)
-      end
-    end
-    if not RegisteredNativeContexts[n] then
-      local ok,result=pcall(function() return settings:RegisterInputMappingContext(ctx) end)
-      if ok and result~=false then RegisteredNativeContexts[n]=true; added=added+1
-      elseif not ok then log("Could not register native mapping context "..n..": "..tostring(result)) end
-    end
-  end
-  return added
-end
-local function mapping_has_current_key(m)
-  local n=mapping_key_name(m):lower()
-  return n~="" and n~="none" and n~="invalid"
-end
-local function make_unmap_args(m,profileId)
-  local args={MappingName=m.MappingName,Slot=m.Slot,bDeferOnSettingsChangedBroadcast=true}
-  if m.HardwareDeviceId~=nil then args.HardwareDeviceId=m.HardwareDeviceId end
-  if profileId~=nil then args.ProfileId=profileId end
-  return args
-end
-local function remove_persistent_defined_action_bindings(sub,pi)
-  if Config.RemoveDefinedActionBindings==0 then return false end
-  PersistentCleanupAttempts=PersistentCleanupAttempts+1
-  local settings,source=input_settings(sub); if not valid(settings) then cleanup_stage(source or "user settings unavailable"); return false end
-  local settingsName=fullname(settings)
-  if settingsName~=PersistentCleanupSettingsName then
-    PersistentCleanupSettingsName=settingsName
-    PersistentCleanupDone=false
-    RegisteredNativeContexts={}
-    cleanup_stage("using "..tostring(source).." object "..settingsName)
-  end
-  local registered=register_native_contexts_with_settings(settings,pi)
-  if registered>0 then PersistentCleanupDone=false end
-  if PersistentCleanupDone then return true end
-  local okp,profile=pcall(function() return settings:GetCurrentKeyProfile() end)
-  if not okp or not valid(profile) then cleanup_stage("current key profile unavailable via "..tostring(source)); return false end
-  local okid,profileId=pcall(function() return settings:GetCurrentKeyProfileIdentifier() end)
-  if not okid then profileId=nil end
-
-  local mappings,scanned=collect_mappings(profile)
-  if not scanned then cleanup_stage("player mapping rows unavailable via "..tostring(source)); return false end
-  if #mappings==0 then
-    cleanup_stage(string.format("profile has zero player-mappable rows after registering %d active native context(s)",registered))
-    return false
-  end
-  cleanup_stage(string.format("scanning %d player mapping(s) via %s",#mappings,tostring(source)))
-  local matched,attempted=0,0
-  for _,m in ipairs(mappings) do
-    local action=unwrap(m.AssociatedInputAction)
-    local targeted=(valid(action) and action_is_defined_here(action)) or mapping_name_is_defined_here(mapping_name(m))
-    if targeted then
-      matched=matched+1
-      if mapping_has_current_key(m) then
-        attempted=attempted+1
-        local ok,e=pcall(function() settings:UnMapPlayerKey(make_unmap_args(m,profileId),{}) end)
-        if not ok then log("Persistent unmap failed for "..mapping_name(m)..": "..tostring(e)) end
-      end
-    end
-  end
-  if attempted>0 then
-    pcall(function() settings:ApplySettings() end)
-    -- AsyncSaveSettings is the stock Enhanced Input persistence API. Keep the
-    -- subclass-specific synchronous name as a compatibility fallback.
-    local saved=pcall(function() settings:AsyncSaveSettings() end)
-    if not saved then pcall(function() settings:SaveSettings() end) end
-  end
-
-  -- Do not declare success merely because the reflected call did not throw.
-  -- Re-read the profile so the standard Controls screen and this guard agree.
-  local currentProfile=profile
-  local okcurrent,p=pcall(function() return settings:GetCurrentKeyProfile() end)
-  if okcurrent and valid(p) then currentProfile=p end
-  local after,afterScanned=collect_mappings(currentProfile)
-  local remaining=0
-  if afterScanned then
-    for _,m in ipairs(after) do
-      local action=unwrap(m.AssociatedInputAction)
-      local targeted=(valid(action) and action_is_defined_here(action)) or mapping_name_is_defined_here(mapping_name(m))
-      if targeted and mapping_has_current_key(m) then remaining=remaining+1 end
-    end
-  end
-  PersistentCleanupDone=afterScanned and matched>0 and remaining==0
-  if PersistentCleanupDone then
-    log(string.format("Persistent controls cleanup verified: %d targeted mapping(s), none still bound.",matched))
-  elseif attempted>0 or (PersistentCleanupAttempts==1 and matched==0) then
-    log(string.format("Persistent controls cleanup pending: matched=%d, attempted=%d, remaining=%d.",matched,attempted,remaining))
-  end
-  return PersistentCleanupDone
-end
-
-local function mapping_settings_name(mapping,action)
-  local settings=safe(mapping,"PlayerMappableKeySettings")
-  if not valid(settings) and valid(action) then settings=safe(action,"PlayerMappableKeySettings") end
-  if not valid(settings) then return "" end
-  return fname_string(safe(settings,"Name"))
-end
-local function rebel_target_names(system)
-  local names={}
-  local function add_name(name)
-    name=fname_string(name)
-    if name~="" and name:lower()~="none" and mapping_name_is_defined_here(name) then names[name:lower()]=name end
-  end
-  local contexts=valid(system) and safe(system,"RebindableContexts") or nil
-  each_container(contexts,function(_,cp)
-    local context=unwrap(cp)
-    each_container(valid(context) and safe(context,"Mappings") or nil,function(_,mp)
-      local mapping=unwrap(mp); local action=mapping and safe(mapping,"Action") or nil
-      if valid(action) and action_is_defined_here(action) then
-        add_name(mapping_settings_name(mapping,action))
-        local actionName=fullname(action):match("%.([^%.:]+)$")
-        add_name(actionName)
-      end
-    end)
-  end)
-  -- The dump proves that some settings contexts are loaded before gameplay but are
-  -- not necessarily present in AppliedInputContexts. Scan those assets as well.
-  for _,entry in ipairs(target_contexts(nil)) do
-    each_container(safe(entry.context,"Mappings"),function(_,mp)
-      local mapping=unwrap(mp); local action=mapping and safe(mapping,"Action") or nil
-      if valid(action) and action_is_defined_here(action) then add_name(mapping_settings_name(mapping,action)) end
-    end)
-  end
-  return names
-end
-local function set_map_value(ref,value)
-  local ok=pcall(function() ref:set(value) end)
-  return ok
-end
-local CanonicalRebelRows={
-  "player_quickslot_left","player_quickslot_top","player_quickslot_right","player_quickslot_bottom",
-  "combat_draw_weapon","combat_toggle_quickslots","ow_toggle_quickslots"
-}
-local DisplayUnboundNames={}
-for _,n in ipairs(CanonicalRebelRows) do DisplayUnboundNames[n]=true end
-local function install_controls_display_hook()
-  local ok,err=pcall(function()
-    RegisterHook("/Script/RebelInputDisplay.RebelInputDisplayBlueprintFunctionLibrary:GetKeyFromBindingName",function(Context)
-      local name=fname_string(Context and (Context.InName or Context["InName"])):lower()
-      if not DisplayUnboundNames[name] then return end
-      local rv=Context and (Context.ReturnValue or Context["ReturnValue"])
-      if rv and rv.set then
-        rv:set({KeyboardKey={KeyName=FName("None")},GamepadKey={KeyName=FName("None")}})
-        log("Controls display override: "..name.." -> None")
-      end
-    end)
-  end)
-  if not ok then log("Controls display hook unavailable: "..tostring(err)) end
-end
-if Config.RemoveDefinedActionBindings~=0 then install_controls_display_hook() end
-local function clear_rebel_map(map,targetNames,presetValues,ensureCanonical)
-  local matched,changed=0,0
-  if map==nil then return matched,changed end
-  local seen={}
-  pcall(function()
-    map:ForEach(function(k,v)
-      local name=fname_string(k)
-      if targetNames[name:lower()] or mapping_name_is_defined_here(name) then
-        seen[name:lower()]=true
-        matched=matched+1
-        local replacement=presetValues and {Key={KeyName=FName("None")}} or {KeyName=FName("None")}
-        if set_map_value(v,replacement) then changed=changed+1 end
-        if not ReportedControlTargets["rebel|"..name] then
-          ReportedControlTargets["rebel|"..name]=true
-          log("Controls removal target: "..name.." in RebelInputMappingSubsystem")
-        end
-      end
-    end)
-  end)
-  -- Default rows may not exist in SavedKeyboardBindings. Add an explicit
-  -- None override so GetInputForMapping resolves them as unbound.
-  if ensureCanonical then
-    for _,name in ipairs(CanonicalRebelRows) do
-      if targetNames[name:lower()] and not seen[name:lower()] then
-        local replacement={KeyName=FName("None")}
-        local ok=pcall(function() map:Add(FName(name),replacement) end)
-        if ok then matched=matched+1; changed=changed+1; seen[name]=true end
-      end
-    end
-  end
-  return matched,changed
-end
-local function rebel_key_name(system,name)
-  -- The Controls widgets resolve pending/current values, not just the
-  -- immutable default preset. Include pending state when verifying.
-  local ok,mapped=pcall(function() return system:GetInputForMapping(FName(name),true) end)
-  if not ok or mapped==nil then return "<query failed>" end
-  local key=safe(mapped,"KeyboardKey")
-  return fname_string(key and safe(key,"KeyName"))
-end
-local function remove_rebel_defined_action_bindings()
-  local system=get_live("RebelInputMappingSubsystem")
-  if not valid(system) then cleanup_stage("RebelInputMappingSubsystem unavailable"); return false end
-  local systemName=fullname(system)
-  if systemName~=RebelCleanupObjectName then
-    RebelCleanupObjectName=systemName; PersistentCleanupDone=false
-    cleanup_stage("using game Controls source "..systemName)
-  end
-  local names=rebel_target_names(system)
-  local nameCount=0; for _ in pairs(names) do nameCount=nameCount+1 end
-  if nameCount==0 then cleanup_stage("no targeted names found in rebindable settings contexts"); return false end
-
-  -- The Controls screen can write a targeted binding again after our first
-  -- successful cleanup. Verify the resolved values on every watchdog pass
-  -- instead of treating the first success as permanent.
-  if PersistentCleanupDone then
-    local rebound=false
-    for _,name in pairs(names) do
-      local key=rebel_key_name(system,name):lower()
-      if key~="" and key~="none" and key~="invalid" then rebound=true; break end
-    end
-    if not rebound then return true end
-    PersistentCleanupDone=false
-    cleanup_stage("targeted native binding changed; cleaning it again")
-  end
-
-  local save=safe(system,"PlayerMappingSave")
-  local preset=safe(system,"DefaultKeyboardPreset")
-  local saveMatched,saveChanged=clear_rebel_map(valid(save) and safe(save,"SavedKeyboardBindings") or nil,names,false,true)
-  local presetMatched,presetChanged=clear_rebel_map(valid(preset) and safe(preset,"PresetMapping") or nil,names,true)
-
-  -- DefaultKeyboardPreset is not necessarily the preset currently selected by
-  -- the Controls screen. Its resolver uses LoadedInputPresets, so clear the
-  -- loaded keyboard preset objects as well. This is deliberately limited to
-  -- preset maps; live Enhanced Input contexts are never edited here.
-  local loadedMatched,loadedChanged=0,0
-  each_container(safe(system,"LoadedInputPresets"),function(_,entry)
-    local loaded=unwrap(entry)
-    if valid(loaded) then
-      local m,c=clear_rebel_map(safe(loaded,"PresetMapping"),names,true)
-      loadedMatched=loadedMatched+m; loadedChanged=loadedChanged+c
-    end
-  end)
-  pcall(function() system:ApplyPendingKeyboardMappings() end)
-
-  local remaining=0
-  for _,name in pairs(names) do
-    local key=rebel_key_name(system,name):lower()
-    if key~="" and key~="none" and key~="invalid" then
-      remaining=remaining+1
-      log("Controls remaining binding: "..name.." = "..rebel_key_name(system,name))
-    end
-  end
-  PersistentCleanupDone=(presetMatched+saveMatched+loadedMatched)>0 and remaining==0
-  if PersistentCleanupDone then
-    log(string.format("Controls cleanup verified through RebelInputMappingSubsystem: targets=%d, default=%d/%d, loaded=%d/%d, saved=%d/%d, none still bound.",nameCount,presetChanged,presetMatched,loadedChanged,loadedMatched,saveChanged,saveMatched))
-  else
-    cleanup_stage(string.format("Rebel Controls cleanup pending: names=%d, default=%d/%d, loaded=%d/%d, saved=%d/%d, remaining=%d",nameCount,presetChanged,presetMatched,loadedChanged,loadedMatched,saveChanged,saveMatched,remaining))
-  end
-  return PersistentCleanupDone
-end
-
-local function remove_native_conflicts(sub,pi)
-  if Config.RemoveDefinedActionBindings==0 then return false end
-  -- Dawnwalker's Controls page resolves keys through RebelInputMappingSubsystem,
-  -- not directly through EnhancedInputUserSettings. Never fall back to editing
-  -- live Enhanced Input contexts: doing so can remove mappings used by this
-  -- mod's own high-priority context when the menu-side cleanup is unresolved.
-  return remove_rebel_defined_action_bindings()
+  return Suppression:Apply(contexts)
 end
 
 -- Dawnwalker keeps gameplay mapping contexts applied while Pause, Game Hub and
@@ -541,6 +208,7 @@ local function blocks_gameplay_widget(o)
   local n=fullname(o):lower()
   local className=n:match("^(%S+)") or ""
   return className=="wbp_pausemenu_c"
+      or className=="wbp_inventory_quickslotbindoverlay_c"
       or n:find("wbp_hub_",1,true)~=nil
       or n:find("/_unified/pausemenu/",1,true)~=nil
       or n:find("/_unified/gamehub/",1,true)~=nil
@@ -585,25 +253,43 @@ report_input_gate=function()
       or ("Gameplay shortcut callbacks suppressed: "..input_gate_summary()))
 end
 local function action_input_allowed(entry)
-  if gameplay_input_allowed() then return true end
-  -- Consumable shortcuts remain intentionally usable while the inventory's
-  -- quickslot assignment overlay is active; that is configuration, not gameplay.
-  return entry and entry.field and entry.field:find("Consumable",1,true)==1 and valid(bind_overlay())
+  return gameplay_input_allowed()
 end
 local function install_input_gate_hooks()
   local function hook(name,before,after)
     local ok,e=pcall(function() RegisterHook(name,before,after) end)
     if not ok then log("Input gate hook unavailable: "..name..": "..tostring(e)) end
   end
-  hook("/Script/CommonUI.CommonActivatableWidget:ActivateWidget",function() end,function(Context)
+  hook("/Script/CommonUI.CommonActivatableWidget:ActivateWidget",function(Context)
     local o=unwrap(Context)
-    if valid(o) then record_blocking_widget(o,true) end
+    if valid(o) and fullname(o):match("^(%S+)")=="WBP_Inventory_QuickslotBindOverlay_C" and sync_inventory_context then
+      local ok,err=pcall(sync_inventory_context,o)
+      if not ok then log("Inventory context preparation failed: "..tostring(err)) end
+    end
+  end,function(Context)
+    local o=unwrap(Context)
+    if valid(o) then
+      record_blocking_widget(o,true)
+      local class=fullname(o):match("^(%S+)")
+      if blocks_gameplay_widget(o) or class=="WBP_GameHUD_C" then request_recovery() end
+      if class=="WBP_Inventory_QuickslotBindOverlay_C" and sync_inventory_context then
+        local ok,err=pcall(sync_inventory_context,o)
+        if not ok then log("Inventory context activation failed: "..tostring(err)) end
+      end
+    end
   end)
   hook("/Script/CommonUI.CommonActivatableWidget:DeactivateWidget",function(Context)
     local o=unwrap(Context)
-    if valid(o) then record_blocking_widget(o,false) end
+    if valid(o) then
+      record_blocking_widget(o,false)
+      if PersistentInput and fullname(o):match("^(%S+)")=="WBP_Inventory_QuickslotBindOverlay_C" then
+        local ok,err=pcall(function() PersistentInput:CloseInventory() end)
+        if not ok then log("Inventory context removal failed: "..tostring(err)) end
+      end
+    end
   end,function() end)
   hook("/Script/DogwoodUI.UIFrontend:SetGameLayersVisible",function(Context,bVisible)
+    request_recovery()
     local visible=bool_value(bVisible)
     if visible==nil then visible=bool_value(hook_param(Context,"bVisible")) end
     if visible~=nil then InputGate.gameLayersVisible=visible; report_input_gate() end
@@ -621,6 +307,28 @@ local function install_input_gate_hooks()
   report_input_gate()
 end
 if Config.Enabled~=0 then install_input_gate_hooks() end
+
+if Config.Enabled~=0 then
+  RegisterLoadMapPreHook(function()
+    if PersistentInput then
+      local ok,err=pcall(function() PersistentInput:CloseInventory();assert(PersistentInput:Close()) end)
+      if not ok then log("Input detach before travel failed: "..tostring(err)) end
+    end
+    if Suppression then
+      local ok,err=pcall(function() Suppression:Restore() end)
+      if not ok then log("Suppression restoration before travel failed: "..tostring(err)) end
+    end
+    InputGate.blockingWidgets={}
+    if RecoveryWork then RecoveryWork:Invalidate() end
+    if Enhanced then
+      Enhanced.generation=Enhanced.generation+1
+      Enhanced.ready=false
+      Enhanced.sub=nil; Enhanced.playerInput=nil; Enhanced.inputComponent=nil; Enhanced.drawContext=nil
+    end
+    if reset_world_visuals then reset_world_visuals() end
+  end)
+  RegisterLoadMapPostHook(function() request_recovery() end)
+end
 
 local function find_gameplay_stack()
   local ok,controllers=pcall(function() return FindAllOf("PlayerController") end)
@@ -672,7 +380,7 @@ local function bridge_api()
   end
   local ok,caps=pcall(bridge.GetCapabilities)
   if not ok or type(caps)~="table" then return nil,"UE4SSLuaEventBridge capabilities are unavailable" end
-  local required={"enhanced_input","explicit_target","helpers","dynamic_input","trigger_tap","trigger_hold","detailed_errors"}
+  local required={"enhanced_input","explicit_target","detailed_errors"}
   for _,name in ipairs(required) do
     if caps[name]~=true then return nil,"UE4SSLuaEventBridge capability is unavailable: "..name end
   end
@@ -680,27 +388,91 @@ local function bridge_api()
   if tostring(caps.target_ue4ss_commit or "")~="97b7e501" then
     return nil,"UE4SSLuaEventBridge targets an incompatible UE4SS commit: "..tostring(caps.target_ue4ss_commit)
   end
-  if type(bridge.Helpers)~="table" or type(bridge.Helpers.OpenInput)~="function"
-      or type(bridge.Helpers.Trigger)~="table" then
-    return nil,"UE4SSLuaEventBridge OpenInput helpers are unavailable"
+  if type(bridge.OpenInputComponent)~="function" or type(bridge.BindAction)~="function" then
+    return nil,"UE4SSLuaEventBridge explicit action API is unavailable"
   end
   return bridge,caps
 end
+local function retained_input_object(className,name)
+  local outer=className=="InputAction" and StaticFindObject("/Engine/Transient.IMC_QuickslotsForever")
+      or assert(get_live("Engine"),"Engine unavailable"):GetOuter()
+  assert(valid(outer),"Transient input owner unavailable")
+  assert(object_path(outer)==(className=="InputAction" and "/Engine/Transient.IMC_QuickslotsForever" or "/Engine/Transient"),
+      "Unexpected persistent input owner")
+  local path=object_path(outer)..(className=="InputAction" and ":" or ".")..name
+  local object=StaticFindObject(path)
+  if not valid(object) then
+    -- RF_Transient | RF_MarkAsRootSet: bounded named objects retained for this
+    -- process, including inactive inventory contexts and Lua reloads.
+    object=StaticConstructObject(assert(cls("/Script/EnhancedInput."..className)),outer,FName(name),0xC0)
+  end
+  assert(valid(object),"Unable to retain "..name)
+  return object
+end
+PersistentInput=dofile(scripts.."/persistent_input.lua")({
+  valid=valid,path=object_path,resolve=native_action,retain=retained_input_object,name=FName,
+  same=function(a,b) return valid(a) and valid(b) and fullname(a)==fullname(b) end,
+  key=function(vk) return VK_TO_FKEY[vk] end,
+  each=function(c,fn) assert(each_container(c,function(i,v) fn(i,unwrap(v)) end),"Mapping access failed") end,
+  bridge=function() return assert(bridge_api()) end,
+  initialize_identity=function(a)
+    StaticFindObject("/Script/Engine.Default__KismetSystemLibrary"):Conv_ObjectToSoftObjectReference(a)
+  end,
+  trigger=function(a,mode,threshold)
+    local className=mode==1 and "InputTriggerHold" or "InputTriggerTap"
+    local t
+    each_container(a.Triggers,function(_,v)
+      local candidate=unwrap(v)
+      if valid(candidate) and fullname(candidate):match("^(%S+)")==className then t=candidate end
+    end)
+    if not valid(t) then t=StaticConstructObject(assert(cls("/Script/EnhancedInput."..className)),a,0,0x40) end
+    assert(valid(t),"Trigger construction failed")
+    if mode==1 then t.HoldTimeThreshold=threshold;t.bIsOneShot=true
+    else t.TapReleaseTimeThreshold=threshold end
+    a.Triggers={t}
+  end,
+  native_action=function(direction)
+    return native_action("/Game/_Dawnwalker/Player/Input/Actions/Quickslots/IA_Quickslot_"..direction..".IA_Quickslot_"..direction)
+  end,
+  present=function(context)
+    local found=false
+    if valid(Enhanced.playerInput) and valid(context) then
+      each_container(Enhanced.playerInput.AppliedInputContexts,function(k)
+        if fullname(unwrap(k))==fullname(context) then found=true end
+      end)
+    end
+    return found
+  end,
+})
+Suppression=dofile(scripts.."/runtime_suppression.lua")({
+  valid=valid,path=object_path,resolve=native_action,name=FName,target=action_is_defined_here,
+  key=function(m) return fname_string(m.Key.KeyName) end,
+  each=function(c,fn) assert(each_container(c,function(i,v) fn(i,unwrap(v)) end),"Mapping access failed") end,
+  owned=function(c)
+    -- Native assets live under /Game; preserve all transient mod contexts,
+    -- including native-action inventory and Draw Weapon mappings.
+    return PersistentInput:Owns(c) or not (object_path(c) or ""):match("^/Game/")
+  end,
+  load=function() return ModRef:GetSharedVariable("QuickslotsForever.SuppressionFields.v1") end,
+  save=function(s) ModRef:SetSharedVariable("QuickslotsForever.SuppressionFields.v1",s) end,
+  rebuild=function(c)
+    local lib=StaticFindObject("/Script/EnhancedInput.Default__EnhancedInputLibrary")
+    assert(valid(lib),"EnhancedInputLibrary unavailable")
+    lib:RequestRebuildControlMappingsUsingContext(c,false)
+  end,
+})
+sync_inventory_context=function(overlay)
+  if Config.Enabled==0 then PersistentInput:CloseInventory();return false end
+  local o=overlay or bind_overlay()
+  local sub=live_subsystem()
+  if valid(o) and (overlay~=nil or o:IsActivated()) and valid(sub) then return PersistentInput:OpenInventory(o,sub) end
+  PersistentInput:CloseInventory()
+  return true
+end
 local function clear_bridge_bindings()
   Enhanced.generation=Enhanced.generation+1
-  if Enhanced.inputScope then
-    local ok,closed,err=pcall(function() return Enhanced.inputScope:Close() end)
-    if not ok or closed~=true then
-      local message
-      if not ok then
-        message="Close raised a Lua error: "..tostring(closed)
-      else
-        message="Close returned failure: "..tostring(err or "no error detail")
-      end
-      log("Enhanced Input helper cleanup pending: "..message)
-      return false,message
-    end
-  end
+  local ok,closed,err=pcall(function() return PersistentInput:Close() end)
+  if not ok or not closed then return false,tostring(ok and err or closed) end
   Enhanced.inputScope=nil
   Enhanced.helperHandles={}
   Enhanced.inputComponent=nil
@@ -710,23 +482,10 @@ end
 local function bind_bridge_actions(input,sub,defs)
   local bridge,bridgeErr=bridge_api()
   if not bridge then return false,bridgeErr end
-  local componentPath=object_path(input)
-  if not componentPath then return false,"could not derive gameplay PawnInputComponent path" end
-  local subsystemPath=object_path(sub)
-  if not subsystemPath then return false,"could not derive Enhanced Input subsystem path" end
-  local okOpen,scope,openErr=pcall(bridge.Helpers.OpenInput,{
-    component_path=componentPath,
-    subsystem_path=subsystemPath,
-    mapping_priority=10000,
-    debug=false,
-  })
-  if not okOpen then return false,"OpenInput raised a Lua error: "..tostring(scope) end
-  if scope==nil then return false,"OpenInput returned failure: "..tostring(openErr or "no error detail") end
-  Enhanced.inputScope=scope
+  PersistentInput:Configure(Config)
   Enhanced.inputComponent=input
-  Enhanced.inputComponentPath=componentPath
+  Enhanced.inputComponentPath=object_path(input)
   local generation=Enhanced.generation
-  local Trigger=bridge.Helpers.Trigger
   local function callback_for(binding)
     return function()
       -- Bridge callbacks run on the UE4SS update thread. Dawnwalker widget
@@ -757,33 +516,9 @@ local function bind_bridge_actions(input,sub,defs)
       if not scheduled then log(binding.field.." game-thread dispatch failed: "..tostring(scheduleErr)) end
     end
   end
-  for _,entry in ipairs(defs) do
-    local key=VK_TO_FKEY[Config[entry.field]]
-    if not key then clear_bridge_bindings(); return false,"unsupported FKey for "..entry.field end
-    entry.mode=Config[entry.field.."Mode"] or 0
-    local trigger=entry.mode==1 and Trigger.Hold or Trigger.Tap
-    local options={
-      threshold_seconds=Config.HoldThresholdMs/1000.0,
-      -- Tap and Hold intentionally share keys in several presets. The bridge
-      -- helper documents non-consuming generated actions as the mode that lets
-      -- both mappings be evaluated without suppressing one another.
-      consume_input=false,
-      trigger_when_paused=false,
-    }
-    if entry.mode==1 then options.one_shot=true end
-    local ok,handle,err=pcall(function()
-      return scope:Bind(key,trigger,callback_for(entry),options)
-    end)
-    if not ok then
-      clear_bridge_bindings()
-      return false,entry.field.." Bind raised a Lua error: "..tostring(handle)
-    end
-    if handle==nil then
-      clear_bridge_bindings()
-      return false,entry.field.." Bind returned failure: "..tostring(err or "no error detail")
-    end
-    Enhanced.helperHandles[#Enhanced.helperHandles+1]=handle
-  end
+  local bound,err=PersistentInput:Bind(input,sub,defs,callback_for)
+  if not bound then return false,err end
+  Enhanced.inputScope=PersistentInput
   Enhanced.actions=defs
   return true
 end
@@ -851,7 +586,7 @@ local function configure_cloned_draw_context(sub,action,key,mode)
     chosen.Action=action
     chosen.Key={KeyName=FName(key)}
     chosen.PlayerMappableKeySettings=nil
-    chosen.SettingBehavior=0
+    chosen.SettingBehavior=2
     local modifiers=safe(chosen,"Modifiers"); if modifiers then modifiers:Empty() end
   end)
   for _,r in ipairs(removals) do
@@ -884,20 +619,23 @@ local function clear_old_context(sub)
   if not ok then return false,tostring(cleared) end
   return cleared,err
 end
-local function gameplay_context_signature(playerInput)
+local function gameplay_context_signature(playerInput,drawContext)
   if not valid(playerInput) then return "<no-player-input>" end
   local contexts={}
+  local drawName=valid(drawContext) and fullname(drawContext) or nil
+  local drawPresent=false
   each_container(safe(playerInput,"AppliedInputContexts"),function(k,_)
     local context=unwrap(k)
     if valid(context) then
       local name=fullname(context)
+      if name==drawName then drawPresent=true end
       if name:find("IMC_OW.",1,true) or name:find("IMC_RTCombat.",1,true) then
         contexts[#contexts+1]=name
       end
     end
   end)
   table.sort(contexts)
-  return #contexts>0 and table.concat(contexts,"|") or "<no-gameplay-routing-context>"
+  return (#contexts>0 and table.concat(contexts,"|") or "<no-gameplay-routing-context>"),drawPresent
 end
 local function setup_enhanced_input()
   if Enhanced.ready then return true end
@@ -922,9 +660,7 @@ local function setup_enhanced_input()
       defs[#defs+1]={group=group,slot=slot,field=group..slot}
     end
   end
-  -- OpenInput owns one private transient action/context per binding and rolls
-  -- back partial creation on failure. QuickslotsForever retains target discovery,
-  -- lifecycle, gameplay gating and Dawnwalker dispatch policy.
+  -- The mod retains named actions; only subscriptions follow the input component.
   local bridgeBound,bindErr=bind_bridge_actions(input,sub,defs)
   if not bridgeBound then
     log("Enhanced Input helper binding failed: "..tostring(bindErr))
@@ -955,21 +691,23 @@ local function setup_enhanced_input()
   pcall(function() sub:RequestRebuildControlMappings(options,1) end)
   Enhanced.gameplayContextSignature=gameplay_context_signature(pi)
   Enhanced.ready=true
+  sync_inventory_context()
   sync_blocking_widgets_once()
-  log(string.format("Enhanced Input ready on %s: %d OpenInput helper bindings + native Draw Weapon, Tap/Hold threshold=%d ms, gameplay routing=%s.",Enhanced.inputComponentPath or "<unknown>",#Enhanced.actions,Config.HoldThresholdMs,Enhanced.gameplayContextSignature))
+  log(string.format("Enhanced Input ready on %s: %d persistent action bindings + native Draw Weapon, Tap/Hold threshold=%d ms, gameplay routing=%s.",Enhanced.inputComponentPath or "<unknown>",#Enhanced.actions,Config.HoldThresholdMs,Enhanced.gameplayContextSignature))
   return true
 end
 local function context_present(ctx)
   if not valid(ctx) or not valid(Enhanced.playerInput) then return false end
+  local contextName=fullname(ctx)
   local present=false
   each_container(safe(Enhanced.playerInput,"AppliedInputContexts"),function(k,_)
     local key=unwrap(k)
-    if valid(key) and fullname(key)==fullname(ctx) then present=true end
+    if valid(key) and fullname(key)==contextName then present=true end
   end)
   return present
 end
-local function ensure_context(ctx,priority,label)
-  if context_present(ctx) then return true end
+local function ensure_context(ctx,priority,label,knownPresent)
+  if knownPresent==true or (knownPresent==nil and context_present(ctx)) then return true end
   if not valid(ctx) or not valid(Enhanced.sub) then return false end
   local options={bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false}
   local ok,e=pcall(function() Enhanced.sub:AddMappingContext(ctx,priority,options) end)
@@ -979,9 +717,7 @@ local function ensure_context(ctx,priority,label)
   return true
 end
 local DisabledContextCleaned=false
-local function enhanced_init_loop()
-  ExecuteWithDelay(750,function()
-    ExecuteInGameThread(function()
+local function enhanced_input_step()
       if Config.Enabled~=0 then
         DisabledContextCleaned=false
         if Enhanced.ready then
@@ -1002,13 +738,14 @@ local function enhanced_init_loop()
             local closed=clear_bridge_bindings()
             if closed then Enhanced.ready=false end
           else
-            local currentSignature=gameplay_context_signature(liveInput)
+            local currentSignature,drawPresent=gameplay_context_signature(liveInput,Enhanced.drawContext)
             if currentSignature~=Enhanced.gameplayContextSignature then
               log("Enhanced Input gameplay routing changed: "..tostring(Enhanced.gameplayContextSignature).." -> "..currentSignature.."; rebuilding helper scope.")
               local closed=clear_bridge_bindings()
               if closed then Enhanced.ready=false end
             else
-              ensure_context(Enhanced.drawContext,10001,"Draw Weapon")
+              ensure_context(Enhanced.drawContext,10001,"Draw Weapon",drawPresent)
+              PersistentInput:EnsureGameplay(Enhanced.sub)
             end
           end
         end
@@ -1018,111 +755,21 @@ local function enhanced_init_loop()
         local sub=live_subsystem()
         if closed and valid(sub) then DisabledContextCleaned=clear_old_context(sub)==true end
       end
-      enhanced_init_loop()
-    end)
-  end)
 end
-if Config.Enabled~=0 then enhanced_init_loop() end
 
--- Controls settings exist at the main menu and do not depend on a gameplay pawn,
--- gameplay world, DogwoodPlayerInput, or EnhancedInputLocalPlayerSubsystem. When
--- optional native cleanup is enabled, wait for the game's mapping subsystem.
-local function controls_cleanup_watch()
-  ExecuteWithDelay(1500,function()
-    ExecuteInGameThread(function()
-      remove_native_conflicts(nil,nil)
-      controls_cleanup_watch()
-    end)
-  end)
-end
-if Config.RemoveDefinedActionBindings~=0 then controls_cleanup_watch() end
+-- Runtime suppression is applied to active native contexts after lifecycle events.
+-- Controls row appearance is separate; saved user bindings remain untouched.
 
--- HUD positioning + key-icon display. Native hold override is deliberately disabled
--- because this HUD renders it as a gray square rather than the desired underline.
+-- HUD positioning and native key-icon display; no replacement keycap widgets.
 local function parent(w) if not valid(w) then return nil end local ok,p=pcall(function() return w:GetParent() end); return ok and valid(p) and p or nil end
 local function belongs(h,w)
   if not valid(h) or not valid(w) then return false end local tree=safe(h,"WidgetTree"); local root=valid(tree) and safe(tree,"RootWidget") or nil; if not valid(root) then return false end
   local rn=fullname(root); local n=w; for _=1,20 do if not valid(n) then return false end; if fullname(n)==rn then return true end; n=parent(n) end; return false
 end
-local KeyVisuals={}
-local function make_widget(classPath,tree)
-  local c=cls(classPath); if not valid(c) then return nil end
-  local ok,o=pcall(function() return StaticConstructObject(c,tree) end)
-  return ok and valid(o) and o or nil
-end
-local function ensure_key_visual(w,vk,hold)
-  local id=fullname(w); local rec=KeyVisuals[id]
-  if rec and (not valid(rec.box) or not valid(rec.text) or not valid(rec.line)) then KeyVisuals[id]=nil; rec=nil end
-  if not rec then
-    local overlay=parent(w)
-    local tree=nil
-    if valid(overlay) then local ok,o=pcall(function() return overlay:GetOuter() end); if ok and valid(o) then tree=o end end
-    if not valid(tree) then local ok,o=pcall(function() return w:GetOuter() end); if ok and valid(o) then tree=o end end
-    if valid(overlay) and fullname(overlay):find("Overlay",1,true) and valid(tree) then
-      local box=make_widget("/Script/UMG.SizeBox",tree)
-      local root=make_widget("/Script/UMG.Overlay",tree)
-      local capBox=make_widget("/Script/UMG.SizeBox",tree)
-      local capOuter=make_widget("/Script/UMG.Border",tree)
-      local capInner=make_widget("/Script/UMG.Border",tree)
-      local text=make_widget("/Script/UMG.TextBlock",tree)
-      local lineBox=make_widget("/Script/UMG.SizeBox",tree)
-      local line=make_widget("/Script/UMG.Border",tree)
-      if valid(box) and valid(root) and valid(capBox) and valid(capOuter) and valid(capInner)
-          and valid(text) and valid(lineBox) and valid(line) then
-        pcall(function() box:SetWidthOverride(46.0); box:SetHeightOverride(54.0); box:SetContent(root) end)
-
-        -- One outer outline only; no nested key-icon artwork or internal outline.
-        pcall(function()
-          capBox:SetWidthOverride(34.0); capBox:SetHeightOverride(34.0); capBox:SetContent(capOuter)
-          capOuter:SetBrushColor({R=0.10,G=0.10,B=0.09,A=1.0})
-          capOuter:SetPadding({Left=1,Top=1,Right=1,Bottom=1})
-          capOuter:SetContent(capInner)
-          capInner:SetBrushColor({R=0.64,G=0.62,B=0.56,A=1.0})
-          capInner:SetPadding({Left=0,Top=0,Right=0,Bottom=0})
-          capInner:SetContent(text)
-          text:SetJustification(1)
-          text:SetColorAndOpacity({SpecifiedColor={R=0.03,G=0.03,B=0.03,A=1.0},ColorUseRule=0})
-          text.Font.Size=22
-        end)
-        local cs=root:AddChildToOverlay(capBox)
-        if valid(cs) then cs:SetHorizontalAlignment(2); cs:SetVerticalAlignment(2); cs:SetPadding({Left=0,Top=0,Right=0,Bottom=8}) end
-
-        pcall(function()
-          lineBox:SetWidthOverride(28.0); lineBox:SetHeightOverride(4.0); lineBox:SetContent(line)
-          line:SetBrushColor({R=0.0,G=0.0,B=0.0,A=1.0})
-        end)
-        local sl=root:AddChildToOverlay(lineBox)
-        if valid(sl) then sl:SetHorizontalAlignment(2); sl:SetVerticalAlignment(3); sl:SetPadding({Left=0,Top=0,Right=0,Bottom=2}) end
-
-        local oks,slot=pcall(function() return overlay:AddChildToOverlay(box) end)
-        if oks and valid(slot) then
-          local oldslot=safe(w,"Slot")
-          if valid(oldslot) then
-            local pad=safe(oldslot,"Padding"); if pad then pcall(function() slot:SetPadding(pad) end) end
-            local ha=safe(oldslot,"HorizontalAlignment"); if ha~=nil then pcall(function() slot:SetHorizontalAlignment(ha) end) end
-            local va=safe(oldslot,"VerticalAlignment"); if va~=nil then pcall(function() slot:SetVerticalAlignment(va) end) end
-          end
-          rec={box=box,text=text,line=lineBox}; KeyVisuals[id]=rec
-        end
-      end
-    end
-  end
-  if not rec then return false end
-  if rec.vk~=vk then
-    if pcall(function() rec.text:SetText(FText(key_label(vk))) end) then rec.vk=vk end
-  end
-  if rec.hold~=hold then
-    if pcall(function() rec.line:SetRenderOpacity(hold==1 and 1.0 or 0.0) end) then rec.hold=hold end
-  end
-  pcall(function() rec.box:SetRenderOpacity(1.0) end)
-  -- Keep the RebelInputWidget only as the layout anchor; its native key artwork is hidden.
-  pcall(function() w:SetRenderOpacity(0.0) end)
-  return true
-end
-local function set_key_widget(w,vk,hold,sys)
-  if not valid(w) or not VK_TO_FKEY[vk] then return false end
-  return ensure_key_visual(w,vk,hold)
-end
+local NativeKeys=dofile(scripts.."/action_indicators.lua")({
+  valid=valid,path=object_path,resolve=native_action,
+  same=function(a,b) return valid(a) and valid(b) and fullname(a)==fullname(b) end,
+})
 local function bindings_widget(owner,props)
   for _,p in ipairs(props) do local w=safe(owner,p); if valid(w) then return w end end
 end
@@ -1132,26 +779,26 @@ local function override_icons(ability,consumable,verbose)
   local n=0
   for slot=1,4 do
     local direction=SLOT_WIDGET[slot]
-    if valid(ab) and set_key_widget(safe(ab,direction),Config["Ability"..slot],Config["Ability"..slot.."Mode"],nil) then n=n+1 end
-    if valid(cb) and set_key_widget(safe(cb,direction),Config["Consumable"..slot],Config["Consumable"..slot.."Mode"],nil) then n=n+1 end
+    if valid(ab) and NativeKeys:Set(safe(ab,direction),PersistentInput.actions["Ability"..slot]) then n=n+1 end
+    if valid(cb) and NativeKeys:Set(safe(cb,direction),PersistentInput.actions["Consumable"..slot]) then n=n+1 end
   end
   if verbose then log("HUD key widgets updated: "..n.."/8.") end
   return n
 end
+local PathCache=dofile(scripts.."/object_paths.lua")
+local pathEnv={find=FindAllOf,valid=valid,path=object_path,resolve=native_action}
+local RadialPaths=PathCache(pathEnv,"WBP_Combat_Focus_QuickslotBindingsRadial_C")
+local PromptPaths=PathCache(pathEnv,"WBP_HUD_Quickslots_ChangePrompt_C")
 local function override_skill_wheel(verbose)
   local n=0
-  local ok,radials=pcall(function() return FindAllOf("WBP_Combat_Focus_QuickslotBindingsRadial_C") end)
-  if ok and radials then for _,radial in ipairs(radials) do
-    if valid(radial) and not fullname(radial):find("Default__",1,true) then
+  RadialPaths:Visit(function(radial)
       for slot=1,4 do
         local entity=safe(radial,SLOT_WIDGET[slot])
         local nested=valid(entity) and safe(entity,"Button") or nil
         local button=valid(nested) and nested or entity
-        if set_key_widget(button,Config["Ability"..slot],Config["Ability"..slot.."Mode"],nil) then n=n+1 end
+        if NativeKeys:Set(button,PersistentInput.actions["Ability"..slot]) then n=n+1 end
       end
-    end
-  end
-  end
+  end)
   if verbose and n>0 then log("Skill-wheel key widgets updated: "..n.." widget(s) across all live radial wheels.") end
   return n
 end
@@ -1170,10 +817,7 @@ local function hide_swap_prompt(hud,ability)
   hide(valid(hud) and safe(hud,"WBP_HUD_Quickslots_ChangePrompt") or nil)
   -- Several prompt instances can coexist during HUD reconstruction. Hiding only
   -- the instance referenced by GameHUD leaves a stale icon/control pair visible.
-  local ok,prompts=pcall(function() return FindAllOf("WBP_HUD_Quickslots_ChangePrompt_C") end)
-  if ok and prompts then for _,prompt in ipairs(prompts) do
-    if valid(prompt) and not fullname(prompt):find("Default__",1,true) then hide(prompt) end
-  end end
+  PromptPaths:Visit(hide)
   -- Fallback names retained for builds where the prompt is nested differently.
   local props={"ToggleQuickSlotsButton","ToggleQuickslotsButton","SwapQuickslots","SwapQuickSlots","ToggleQuickslots"}
   local function hide_fallbacks(owner)
@@ -1197,15 +841,12 @@ local VisualGuardArmed=false
 local LastLayoutError
 -- Do not hook RebelInputWidget:UpdateActionWidget. During initial UI startup,
 -- UE4SS 3.0.1 can crash while marshalling that function's UObject parameter
--- before Lua is entered. The persistent visual guard below already reapplies
--- the same badges after native widget updates without hooking that function.
+-- before Lua is entered. Only existing lifecycle/creation refresh requests update
+-- native icons; this candidate does not hook that function.
 refresh_hud_visuals=function(verbose,hud)
   -- Re-read the persisted visual choice whenever the HUD is rebuilt/reset.
   -- This keeps death/load reconstruction consistent with the Mod Menu checkbox.
   local h=hud or game_hud(); if not valid(h) then if verbose then log("GUI: no live GameHUD.") end; return false end
-  for id,rec in pairs(KeyVisuals) do
-    if not valid(rec.box) or not valid(rec.text) or not valid(rec.line) then KeyVisuals[id]=nil end
-  end
   local s=safe(h,"QuickslotsSwitcher"); local a=safe(h,"WBP_AA_Quickslots"); local c=safe(h,"WBP_HUD_Quickslots")
   if not valid(s) or not valid(a) or not valid(c) then if verbose then log("GUI: quickslot widgets not ready.") end; return false end
   if not belongs(h,s) or not belongs(h,a) or not belongs(h,c) then if verbose then log("GUI: stale HUD tree rejected.") end; return false end
@@ -1214,10 +855,10 @@ refresh_hud_visuals=function(verbose,hud)
   if not laidOut then
     if LastLayoutError~=layoutError then log("GUI layout pending: "..tostring(layoutError)); LastLayoutError=layoutError end
   else LastLayoutError=nil end
-  override_icons(a,c,verbose)
+  local connected=override_icons(a,c,verbose)
   override_skill_wheel(verbose)
   if laidOut and Config.ShowBothWheels~=0 then hide_swap_prompt(h,a) end
-  return laidOut
+  return laidOut and connected==8
 end
 
 local function apply_hud(hud)
@@ -1254,63 +895,107 @@ end
 -- without retaining or mutating the possibly partial creation wrapper.
 if Config.Enabled~=0 then pcall(function()
   NotifyOnNewObject("/Game/_Dawnwalker/UI/_Unified/HUD/Quickslots/WBP_HUD_Quickslots_ChangePrompt.WBP_HUD_Quickslots_ChangePrompt_C",function()
+    PromptPaths:Invalidate()
+    request_recovery()
     if Config.ShowBothWheels~=0 then queue_radial_refresh(true) end
   end)
+  PromptPaths:EnableNotifications()
 end) end
 
 if Config.Enabled~=0 then pcall(function()
   RegisterHook("/Game/_Dawnwalker/UI/_Unified/HUD/CombatFocus/WBP_Combat_Focus_QuickslotBindingsRadial.WBP_Combat_Focus_QuickslotBindingsRadial_C:Rebuild All",function() end,function()
+    RadialPaths:Invalidate()
     queue_radial_refresh()
   end)
 end) end
 
 if Config.Enabled~=0 then pcall(function()
   NotifyOnNewObject("/Game/_Dawnwalker/UI/_Unified/HUD/CombatFocus/WBP_Combat_Focus_QuickslotBindingsRadial.WBP_Combat_Focus_QuickslotBindingsRadial_C",function()
+    RadialPaths:Invalidate()
     queue_radial_refresh()
   end)
+  RadialPaths:EnableNotifications()
 end) end
 
--- Register one timer at load; never register ExecuteWithDelay recursively from
--- a game-thread callback (native overload failure observed in v0.3.34).
--- Startup latency is secondary to a stable 500 ms cadence and one queued job.
-local AutoHudApplied=false
-local AutoHudName=""
-local HudWorkPending=false
-local LastHudWorkError
-local function update_hud_once()
-  local h=game_hud(); local n=valid(h) and fullname(h) or ""
-  if n~="" and n~=AutoHudName then
-    AutoHudApplied=false
-    if apply_hud(h) then AutoHudName=n; AutoHudApplied=true end
-  elseif n~="" then
-    AutoHudApplied=refresh_hud_visuals(false,h)
-    if not AutoHudApplied then AutoHudName="" end
-  else
-    AutoHudApplied=false; AutoHudName=""
+if Config.Enabled~=0 then
+  for _,path in ipairs({
+    "/Script/RebelInputDisplay.RebelInputWidget",
+    "/Game/_Dawnwalker/UI/_Unified/HUD/WBP_GameHUD.WBP_GameHUD_C",
+  }) do
+    pcall(NotifyOnNewObject,path,function()
+      if RecoveryWork then RecoveryWork:Request('hud') end
+      RadialPaths:Invalidate()
+    end)
   end
 end
-if Config.Enabled~=0 then LoopAsync(500,function()
-  if Config.Enabled==0 then return true end
-  if HudWorkPending then return false end
-  HudWorkPending=true
-  local scheduled,err=pcall(function()
-    ExecuteInGameThread(function()
-      local ok,why=pcall(function() if Config.Enabled~=0 then update_hud_once() end end)
-      HudWorkPending=false
-      if not ok then
-        if LastHudWorkError~=tostring(why) then log("HUD update failed: "..tostring(why)); LastHudWorkError=tostring(why) end
-      else LastHudWorkError=nil end
+
+-- One cheap timer checks pending event work. Once recovered it dispatches nothing.
+-- No cached UObject/path lookup is used to decide whether idle work is needed.
+local AutoHudApplied=false
+local AutoHudName=""
+local function update_hud_once()
+  local h=game_hud(); local n=valid(h) and fullname(h) or ""
+  if n=="" then AutoHudApplied=false; AutoHudName=""; return false end
+  if n~=AutoHudName then
+    AutoHudApplied=apply_hud(h)==true
+    if AutoHudApplied then AutoHudName=n end
+  else AutoHudApplied=refresh_hud_visuals(false,h)==true end
+  return AutoHudApplied
+end
+reset_world_visuals=function()
+  NativeKeys:Forget()
+  WheelLayout:Forget()
+  AutoHudName=""; AutoHudApplied=false; VisualGuardArmed=false
+  RadialPaths:Invalidate(); PromptPaths:Invalidate()
+end
+RecoveryWork=dofile(scripts.."/event_work.lua")({
+  attempts=6,queue=ExecuteInGameThread,log=log,
+  enabled=function() return Config.Enabled~=0 or Config.RemoveDefinedActionBindings~=0 end,
+  run=function(name)
+    if name=='input' then enhanced_input_step(); return Enhanced.ready end
+    if name=='hud' then return update_hud_once() end
+    if name=='cleanup' then return remove_native_conflicts(nil,nil) end
+  end,
+})
+local function recovery_hook(path,callback)
+  local ok,err=pcall(RegisterHook,path,function() end,callback)
+  if not ok then log("Recovery hook unavailable: "..path..": "..tostring(err)) end
+end
+if Config.Enabled~=0 or Config.RemoveDefinedActionBindings~=0 then
+  recovery_hook('/Script/Engine.PlayerController:ClientRestart',request_recovery)
+  recovery_hook('/Script/Engine.PlayerController:ClientRetryClientRestart',request_recovery)
+  recovery_hook('/Script/Engine.Controller:OnRep_Pawn',request_recovery)
+  recovery_hook('/Script/RebelInput.RebelInputMappingSubsystem:ApplyPendingKeyboardMappings',request_recovery)
+  -- Suppress a newly applied native context before it enters the active set.
+  -- RequestRebuildControlMappingsUsingContext never calls AddMappingContext.
+  local okSuppressHook,suppressHookError=pcall(RegisterHook,
+    '/Script/EnhancedInput.EnhancedInputSubsystemInterface:AddMappingContext',
+    function(_,mappingContext)
+      if Config.Enabled==0 or Config.RemoveDefinedActionBindings==0 or not Suppression then return end
+      local context=unwrap(mappingContext)
+      if valid(context) then
+        local ok,err=pcall(function() Suppression:Apply({context}) end)
+        if not ok then log('Context suppression failed: '..tostring(err)) end
+      end
+    end,function() end)
+  if not okSuppressHook then log('Pre-activation suppression hook unavailable: '..tostring(suppressHookError)) end
+  for _,name in ipairs({'AddMappingContext','RemoveMappingContext','ClearAllMappings'}) do
+    recovery_hook('/Script/EnhancedInput.EnhancedInputSubsystemInterface:'..name,function()
+      if Config.Enabled~=0 then RecoveryWork:Request('input') end
+      if Config.RemoveDefinedActionBindings~=0 then RecoveryWork:Request('cleanup') end
     end)
-  end)
-  if not scheduled then
-    HudWorkPending=false
-    if LastHudWorkError~=tostring(err) then log("HUD dispatch failed: "..tostring(err)); LastHudWorkError=tostring(err) end
   end
-  return false
-end) end
+  for _,class in ipairs({'/Script/Engine.PlayerController','/Script/EnhancedInput.EnhancedInputLocalPlayerSubsystem',
+      '/Script/EnhancedInput.EnhancedInputComponent'}) do
+    local ok,err=pcall(NotifyOnNewObject,class,request_recovery)
+    if not ok then log('Recovery creation notification unavailable: '..class..': '..tostring(err)) end
+  end
+  request_recovery()
+  LoopAsync(500,function() return RecoveryWork:Tick() end)
+end
 
 -- Mod Menu Apply writes config.ini. Reconfigure bindings and persistent HUD widgets
--- in place so existing custom keycaps are updated rather than duplicated by a Lua
+-- in place so existing native key widgets are updated without replacement on Lua
 -- restart. Master/cleanup-toggle changes still restart because they determine which
 -- hooks and watchdogs are installed at module load. Preset edits remain in memory
 -- until Apply.
@@ -1318,14 +1003,19 @@ local Armed=false
 local function reconfigure_from_text(now)
   local previous=Config
   local updated=load_config(now)
-  if updated.Enabled~=previous.Enabled
-      or updated.RemoveDefinedActionBindings~=previous.RemoveDefinedActionBindings then
+  if updated.Enabled~=previous.Enabled then
+    if NativeKeys then
+      local restored,why=NativeKeys:RestoreAll()
+      if not restored then log("Native display restoration pending: "..tostring(why)); return true end
+    end
     local restored,restoreError=WheelLayout:RestoreAll()
     if not restored then log("GUI restoration pending before restart: "..tostring(restoreError)); return true end
     local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
     if not clear_bridge_bindings() then return true end
     Enhanced.ready=false
     if not clear_old_context(sub) then return true end
+    PersistentInput:CloseInventory()
+    Suppression:Restore()
     LastConfigText=now
     RestartCurrentMod()
     return false
@@ -1333,6 +1023,9 @@ local function reconfigure_from_text(now)
 
   Config=updated
   LastConfigText=now
+  if updated.RemoveDefinedActionBindings~=previous.RemoveDefinedActionBindings then
+    remove_native_conflicts()
+  end
   local inputChanged=updated.HoldThresholdMs~=previous.HoldThresholdMs
       or updated.DrawWeapon~=previous.DrawWeapon or updated.DrawWeaponMode~=previous.DrawWeaponMode
   for _,group in ipairs(BINDING_GROUPS) do for slot=1,4 do
@@ -1351,7 +1044,7 @@ local function reconfigure_from_text(now)
       log("Committed config change is waiting for helper cleanup before input can be rebuilt.")
     end
   end
-  refresh_hud_visuals(false)
+  request_recovery()
   log("Applied committed config changes; input rebuild="..tostring(inputChanged)..".")
   return true
 end
