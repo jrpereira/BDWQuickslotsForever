@@ -5,6 +5,13 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.55
+
+- Remove hook-counting instrumentation and the counter console command.
+- Remove public runtime-inspection tooling and reconstruction evidence; preserve ordinary regression tests.
+- Deployment preserves existing enablement and never creates an enablement marker.
+- Gameplay behavior and outstanding audit findings are unchanged. Native gameplay and FPS acceptance remain separate.
+
 ## 0.3.54
 
 - Focus the mod on ability/consumable Quickslots and wheel handling.
