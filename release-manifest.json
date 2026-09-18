@@ -1,0 +1,19 @@
+{
+  "module": "QuickslotsForever",
+  "version_file": "Scripts/main.lua",
+  "version_pattern": "local VERSION\\s*=\\s*\"([^\\\"]+)\"",
+  "files": {
+    "Scripts/action_indicators.lua": "Scripts/action_indicators.lua",
+    "Scripts/context_registry.lua": "Scripts/context_registry.lua",
+    "Scripts/event_work.lua": "Scripts/event_work.lua",
+    "Scripts/main.lua": "Scripts/main.lua",
+    "Scripts/object_paths.lua": "Scripts/object_paths.lua",
+    "Scripts/persistent_input.lua": "Scripts/persistent_input.lua",
+    "Scripts/runtime_suppression.lua": "Scripts/runtime_suppression.lua",
+    "Scripts/wheel_layout.lua": "Scripts/wheel_layout.lua",
+    "mod_settings.ini": "mod_settings.ini",
+    "README.md": "README.md",
+    "README.txt": "README.txt",
+    "config.example.ini": "distribution/config.ini"
+  }
+}
