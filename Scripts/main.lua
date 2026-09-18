@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.30
+-- QuickslotsForever v0.3.35
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.30"
+local VERSION="0.3.35"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -49,7 +49,8 @@ local function key_label(vk)
   if vk>=112 and vk<=123 then return "F"..tostring(vk-111) end
   local labels={[9]="Tab",[32]="Space",[33]="PgUp",[34]="PgDn",[35]="End",[36]="Home",
     [37]="←",[38]="↑",[39]="→",[40]="↓",[45]="Ins",[46]="Del",[220]="\\"}
-  return labels[vk] or "?"
+  if vk>=96 and vk<=105 then return "Num "..tostring(vk-96) end
+  return labels[vk] or VK_TO_FKEY[vk] or "?"
 end
 
 for i=0,9 do VK_TO_FKEY[0x60+i]="NumPad"..(({"Zero","One","Two","Three","Four","Five","Six","Seven","Eight","Nine"})[i+1]) end
@@ -80,9 +81,8 @@ end
 local LastConfigText=readall(CONFIG_PATH) or InitialText
 local Config=load_config(LastConfigText)
 local Enhanced
--- Gameplay input is owned by UE5 Enhanced Input. Each logical shortcut receives
--- a real InputTriggerTap or InputTriggerHold. UE4SSLuaEventBridge binds native
--- action callbacks provide shortcut dispatch.
+
+-- Gameplay input classification remains owned by Unreal Enhanced Input.
 local function get_live(class,predicate)
   local ok,objs=pcall(function() return FindAllOf(class) end); if not ok or not objs then return nil end
   for _,o in ipairs(objs) do if valid(o) and not fullname(o):find("Default__",1,true) and (not predicate or predicate(o)) then return o end end
@@ -718,6 +718,7 @@ local function bind_bridge_actions(input,sub,defs)
     component_path=componentPath,
     subsystem_path=subsystemPath,
     mapping_priority=10000,
+    debug=false,
   })
   if not okOpen then return false,"OpenInput raised a Lua error: "..tostring(scope) end
   if scope==nil then return false,"OpenInput returned failure: "..tostring(openErr or "no error detail") end
@@ -727,7 +728,7 @@ local function bind_bridge_actions(input,sub,defs)
   local generation=Enhanced.generation
   local Trigger=bridge.Helpers.Trigger
   local function callback_for(binding)
-    return function(event)
+    return function()
       -- Bridge callbacks run on the UE4SS update thread. Dawnwalker widget
       -- lookup, gameplay gating and BP_OnClicked dispatch must run on the
       -- Unreal game thread.
@@ -869,11 +870,19 @@ local function map_native_draw(sub)
   log("Draw Weapon mapped directly to native IA_DrawToggleSword on "..key.." with an Enhanced Input "..(((Config.DrawWeaponMode or 0)==1) and "Hold" or "Tap").." trigger.")
   return context
 end
+local ContextRegistry=dofile(scripts.."/context_registry.lua")({
+  get_shared=function(key) return ModRef:GetSharedVariable(key) end,
+  set_shared=function(key,value) ModRef:SetSharedVariable(key,value) end,
+  path=object_path,resolve=native_action,valid=valid,
+  remove=function(sub,context)
+    sub:RemoveMappingContext(context,{bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false})
+  end,
+})
+ContextRegistry:ForgetLegacy()
 local function clear_old_context(sub)
-  local ok,old=pcall(function() return ModRef:GetSharedVariable("QuickslotsForever.EnhancedContext") end)
-  if ok and valid(old) then pcall(function() sub:RemoveMappingContext(old,{bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false}) end) end
-  local okd,oldDraw=pcall(function() return ModRef:GetSharedVariable("QuickslotsForever.DrawContext") end)
-  if okd and valid(oldDraw) then pcall(function() sub:RemoveMappingContext(oldDraw,{bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false}) end) end
+  local ok,cleared,err=pcall(function() return ContextRegistry:Clear(sub) end)
+  if not ok then return false,tostring(cleared) end
+  return cleared,err
 end
 local function gameplay_context_signature(playerInput)
   if not valid(playerInput) then return "<no-player-input>" end
@@ -903,7 +912,8 @@ local function setup_enhanced_input()
   Enhanced.bridgeError=nil
   local cleared,clearErr=clear_bridge_bindings()
   if not cleared then log("Enhanced Input: "..tostring(clearErr)); return false end
-  clear_old_context(sub)
+  local contextCleared,contextError=clear_old_context(sub)
+  if not contextCleared then log("Draw context cleanup pending: "..tostring(contextError)); return false end
   Enhanced.sub,Enhanced.playerInput,Enhanced.inputComponent=sub,pi,input
   Enhanced.inputComponentPath=object_path(input)
   local defs={}
@@ -927,6 +937,13 @@ local function setup_enhanced_input()
     return false
   end
   Enhanced.drawContext=drawContext
+  local remembered,rememberError=pcall(function() ContextRegistry:Remember(drawContext,sub) end)
+  if not remembered then
+    clear_bridge_bindings()
+    Enhanced.drawContext=nil
+    log("Draw context registration failed: "..tostring(rememberError))
+    return false
+  end
   remove_native_conflicts(nil,nil)
   local options={bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=true,bNotifyUserSettings=false}
   local okdraw,drawAddErr=pcall(function() sub:AddMappingContext(drawContext,10001,options) end)
@@ -936,8 +953,6 @@ local function setup_enhanced_input()
     return false
   end
   pcall(function() sub:RequestRebuildControlMappings(options,1) end)
-  pcall(function() ModRef:SetSharedVariable("QuickslotsForever.EnhancedContext",nil) end)
-  pcall(function() ModRef:SetSharedVariable("QuickslotsForever.DrawContext",drawContext) end)
   Enhanced.gameplayContextSignature=gameplay_context_signature(pi)
   Enhanced.ready=true
   sync_blocking_widgets_once()
@@ -1001,7 +1016,7 @@ local function enhanced_init_loop()
       elseif not DisabledContextCleaned then
         local closed=clear_bridge_bindings()
         local sub=live_subsystem()
-        if closed and valid(sub) then clear_old_context(sub); DisabledContextCleaned=true end
+        if closed and valid(sub) then DisabledContextCleaned=clear_old_context(sub)==true end
       end
       enhanced_init_loop()
     end)
@@ -1093,8 +1108,12 @@ local function ensure_key_visual(w,vk,hold)
     end
   end
   if not rec then return false end
-  pcall(function() rec.text:SetText(FText(key_label(vk))) end)
-  pcall(function() rec.line:SetRenderOpacity(hold==1 and 1.0 or 0.0) end)
+  if rec.vk~=vk then
+    if pcall(function() rec.text:SetText(FText(key_label(vk))) end) then rec.vk=vk end
+  end
+  if rec.hold~=hold then
+    if pcall(function() rec.line:SetRenderOpacity(hold==1 and 1.0 or 0.0) end) then rec.hold=hold end
+  end
   pcall(function() rec.box:SetRenderOpacity(1.0) end)
   -- Keep the RebelInputWidget only as the layout anchor; its native key artwork is hidden.
   pcall(function() w:SetRenderOpacity(0.0) end)
@@ -1180,10 +1199,13 @@ local LastLayoutError
 -- UE4SS 3.0.1 can crash while marshalling that function's UObject parameter
 -- before Lua is entered. The persistent visual guard below already reapplies
 -- the same badges after native widget updates without hooking that function.
-refresh_hud_visuals=function(verbose)
+refresh_hud_visuals=function(verbose,hud)
   -- Re-read the persisted visual choice whenever the HUD is rebuilt/reset.
   -- This keeps death/load reconstruction consistent with the Mod Menu checkbox.
-  local h=game_hud(); if not valid(h) then if verbose then log("GUI: no live GameHUD.") end; return false end
+  local h=hud or game_hud(); if not valid(h) then if verbose then log("GUI: no live GameHUD.") end; return false end
+  for id,rec in pairs(KeyVisuals) do
+    if not valid(rec.box) or not valid(rec.text) or not valid(rec.line) then KeyVisuals[id]=nil end
+  end
   local s=safe(h,"QuickslotsSwitcher"); local a=safe(h,"WBP_AA_Quickslots"); local c=safe(h,"WBP_HUD_Quickslots")
   if not valid(s) or not valid(a) or not valid(c) then if verbose then log("GUI: quickslot widgets not ready.") end; return false end
   if not belongs(h,s) or not belongs(h,a) or not belongs(h,c) then if verbose then log("GUI: stale HUD tree rejected.") end; return false end
@@ -1198,66 +1220,94 @@ refresh_hud_visuals=function(verbose)
   return laidOut
 end
 
-local function apply_hud()
-  local h=game_hud(); if not valid(h) then log("GUI: no live GameHUD."); return end
+local function apply_hud(hud)
+  local h=hud or game_hud(); if not valid(h) then log("GUI: no live GameHUD."); return end
   local s=safe(h,"QuickslotsSwitcher"); local a=safe(h,"WBP_AA_Quickslots"); local c=safe(h,"WBP_HUD_Quickslots"); if not valid(s) or not valid(a) or not valid(c) then log("GUI: quickslot widgets not ready."); return end
   if not belongs(h,s) or not belongs(h,a) or not belongs(h,c) then log("GUI: stale HUD tree rejected."); return end
   VisualGuardArmed=true
-  refresh_hud_visuals(false)
+  if not refresh_hud_visuals(false,h) then return false end
   local ax,ay,cx,cy=wheel_offsets()
   log(string.format("GUI applied: ShowBothWheels=%s, configured Abilities=(%d,%d), Consumables=(%d,%d). Persistent HUD visual guard armed.",tostring(Config.ShowBothWheels~=0),ax,ay,cx,cy))
+  return true
 end
 
--- Hide newly-created native swap prompts immediately. This prevents the native prompt
--- flashing before the periodic fallback guard gets its first pass.
+local RadialRefreshPending=false
+local FullVisualRefreshPending=false
+local function queue_radial_refresh(fullRefresh)
+  if not VisualGuardArmed then return end
+  FullVisualRefreshPending=FullVisualRefreshPending or fullRefresh==true
+  if RadialRefreshPending then return end
+  RadialRefreshPending=true
+  ExecuteWithDelay(1,function()
+    ExecuteInGameThread(function()
+      RadialRefreshPending=false
+      local refreshAll=FullVisualRefreshPending
+      FullVisualRefreshPending=false
+      if Config.Enabled~=0 and VisualGuardArmed then
+        if refreshAll then refresh_hud_visuals(false) else override_skill_wheel(false) end
+      end
+    end)
+  end)
+end
+
+-- Creation callbacks only request work. Resolve live widgets on the game thread,
+-- without retaining or mutating the possibly partial creation wrapper.
 if Config.Enabled~=0 then pcall(function()
-  NotifyOnNewObject("/Game/_Dawnwalker/UI/_Unified/HUD/Quickslots/WBP_HUD_Quickslots_ChangePrompt.WBP_HUD_Quickslots_ChangePrompt_C",function(o)
-    if Config.ShowBothWheels~=0 and valid(o) then WheelLayout:HidePrompt(o) end
+  NotifyOnNewObject("/Game/_Dawnwalker/UI/_Unified/HUD/Quickslots/WBP_HUD_Quickslots_ChangePrompt.WBP_HUD_Quickslots_ChangePrompt_C",function()
+    if Config.ShowBothWheels~=0 then queue_radial_refresh(true) end
   end)
 end) end
 
 if Config.Enabled~=0 then pcall(function()
   RegisterHook("/Game/_Dawnwalker/UI/_Unified/HUD/CombatFocus/WBP_Combat_Focus_QuickslotBindingsRadial.WBP_Combat_Focus_QuickslotBindingsRadial_C:Rebuild All",function() end,function()
-    if VisualGuardArmed then ExecuteWithDelay(1,function() override_skill_wheel(false) end) end
+    queue_radial_refresh()
   end)
 end) end
 
 if Config.Enabled~=0 then pcall(function()
   NotifyOnNewObject("/Game/_Dawnwalker/UI/_Unified/HUD/CombatFocus/WBP_Combat_Focus_QuickslotBindingsRadial.WBP_Combat_Focus_QuickslotBindingsRadial_C",function()
-    if VisualGuardArmed then ExecuteWithDelay(1,function() override_skill_wheel(false) end) end
+    queue_radial_refresh()
   end)
 end) end
 
--- Native combat-state transitions rebuild/rebind the key-display widgets. After the
--- user activates GUI changes once, keep the visual overrides alive without retaining
--- any UObject references. No gameplay UObject is touched before that first activation.
-local function visual_guard()
-  ExecuteWithDelay(500,function()
-    if VisualGuardArmed then ExecuteInGameThread(function() refresh_hud_visuals(false) end) end
-    visual_guard()
-  end)
-end
-if Config.Enabled~=0 then visual_guard() end
-
--- Apply HUD changes automatically once the HUD exists. There is no manual GUI hotkey.
+-- Register one timer at load; never register ExecuteWithDelay recursively from
+-- a game-thread callback (native overload failure observed in v0.3.34).
+-- Startup latency is secondary to a stable 500 ms cadence and one queued job.
 local AutoHudApplied=false
 local AutoHudName=""
-local function auto_hud_apply_loop()
-  ExecuteWithDelay(250,function()
-    ExecuteInGameThread(function()
-     if Config.Enabled~=0 then
-      local h=game_hud(); local n=valid(h) and fullname(h) or ""
-      if n~="" and n~=AutoHudName then
-        apply_hud(); AutoHudName=n; AutoHudApplied=true
-      elseif n=="" then
-        AutoHudApplied=false
-      end
-     end
-    end)
-    if Config.Enabled~=0 then auto_hud_apply_loop() end
-  end)
+local HudWorkPending=false
+local LastHudWorkError
+local function update_hud_once()
+  local h=game_hud(); local n=valid(h) and fullname(h) or ""
+  if n~="" and n~=AutoHudName then
+    AutoHudApplied=false
+    if apply_hud(h) then AutoHudName=n; AutoHudApplied=true end
+  elseif n~="" then
+    AutoHudApplied=refresh_hud_visuals(false,h)
+    if not AutoHudApplied then AutoHudName="" end
+  else
+    AutoHudApplied=false; AutoHudName=""
+  end
 end
-if Config.Enabled~=0 then auto_hud_apply_loop() end
+if Config.Enabled~=0 then LoopAsync(500,function()
+  if Config.Enabled==0 then return true end
+  if HudWorkPending then return false end
+  HudWorkPending=true
+  local scheduled,err=pcall(function()
+    ExecuteInGameThread(function()
+      local ok,why=pcall(function() if Config.Enabled~=0 then update_hud_once() end end)
+      HudWorkPending=false
+      if not ok then
+        if LastHudWorkError~=tostring(why) then log("HUD update failed: "..tostring(why)); LastHudWorkError=tostring(why) end
+      else LastHudWorkError=nil end
+    end)
+  end)
+  if not scheduled then
+    HudWorkPending=false
+    if LastHudWorkError~=tostring(err) then log("HUD dispatch failed: "..tostring(err)); LastHudWorkError=tostring(err) end
+  end
+  return false
+end) end
 
 -- Mod Menu Apply writes config.ini. Reconfigure bindings and persistent HUD widgets
 -- in place so existing custom keycaps are updated rather than duplicated by a Lua
@@ -1272,17 +1322,24 @@ local function reconfigure_from_text(now)
       or updated.RemoveDefinedActionBindings~=previous.RemoveDefinedActionBindings then
     local restored,restoreError=WheelLayout:RestoreAll()
     if not restored then log("GUI restoration pending before restart: "..tostring(restoreError)); return true end
-    LastConfigText=now
     local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
-    clear_bridge_bindings()
-    if valid(sub) then clear_old_context(sub) end
+    if not clear_bridge_bindings() then return true end
+    Enhanced.ready=false
+    if not clear_old_context(sub) then return true end
+    LastConfigText=now
     RestartCurrentMod()
     return false
   end
 
   Config=updated
   LastConfigText=now
-  if Enhanced.ready then
+  local inputChanged=updated.HoldThresholdMs~=previous.HoldThresholdMs
+      or updated.DrawWeapon~=previous.DrawWeapon or updated.DrawWeaponMode~=previous.DrawWeaponMode
+  for _,group in ipairs(BINDING_GROUPS) do for slot=1,4 do
+    local field=group..slot
+    if updated[field]~=previous[field] or updated[field.."Mode"]~=previous[field.."Mode"] then inputChanged=true end
+  end end
+  if inputChanged and Enhanced.ready then
     local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
     local closed=clear_bridge_bindings()
     Enhanced.ready=false
@@ -1295,12 +1352,13 @@ local function reconfigure_from_text(now)
     end
   end
   refresh_hud_visuals(false)
-  log("Applied committed Mod Menu/config changes: input contexts queued for rebuild and all wheel indicators refreshed.")
+  log("Applied committed config changes; input rebuild="..tostring(inputChanged)..".")
   return true
 end
 local function watch()
   ExecuteWithDelay(750,function()
-    local now=readall(CONFIG_PATH) or ""
+    local now=readall(CONFIG_PATH)
+    if now==nil or not now:match("%[General%]") or not now:match("%[Bindings%]") then watch(); return end
     if Armed and now~=LastConfigText then
       ExecuteInGameThread(function()
         if reconfigure_from_text(now) then watch() end
