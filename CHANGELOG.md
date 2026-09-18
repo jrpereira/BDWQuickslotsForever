@@ -5,6 +5,10 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.61
+
+- Remove unused context-name scanning, sorting and concatenation during input recovery. Preserve gameplay context repair and the initialization routing log.
+
 ## 0.3.60
 
 - Finish partial suppression/restoration writes on a direct Restore retry, including after Lua reload, without discarding original settings behavior.
