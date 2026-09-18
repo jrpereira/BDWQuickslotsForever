@@ -17,6 +17,10 @@ return function(e)
       if not e.signature or (e.same_signature and e.same_signature(done.signature,signature))
           or (not e.same_signature and done.signature==signature) then return end
     end
+    -- Only setup work prunes the cache; unchanged completed requests stay cheap.
+    for path,record in pairs(completed) do
+      if not e.valid(record.context) then completed[path]=nil end
+    end
     local ticket={epoch=epoch,context=context}
     pending[key]=ticket
     local function current()

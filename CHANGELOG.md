@@ -5,6 +5,14 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.60
+
+- Finish partial suppression/restoration writes on a direct Restore retry, including after Lua reload, without discarding original settings behavior.
+- Reserve known native keys one-to-one before matching suppressed duplicate rows; preserve explicit failure for genuinely ambiguous identity.
+- Mark only rows actually being restored as in-progress, preserving unrelated external changes after a failed restoration.
+- Prune dead completed wheel-setup records during new setup work, without polling or extra work for unchanged completed requests.
+- Regression coverage includes direct retries, duplicate known-key insertion, external behavior changes and 1000 HUD replacements. Native gameplay/FPS acceptance remains pending.
+
 ## 0.3.59
 
 - Validate requested keys before replacing active shortcuts; add standard missing keyboard keys including Caps Lock, Backspace, Enter and modifiers.

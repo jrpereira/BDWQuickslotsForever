@@ -101,3 +101,51 @@ do
  assert(backing.Key.KeyName=='One' and backing.SettingBehavior==0)
 end
 print('PASS partial restoration retains native baseline across reload and re-suppression')
+
+-- Direct restoration after partial writes must finish without an Apply detour.
+for _,kind in ipairs({'apply','restore'}) do for _,reloadFirst in ipairs({false,true}) do
+ local backing=row('One');local failing
+ local proxy=setmetatable({}, {__index=backing,__newindex=function(_,k,v)
+  if failing==k then failing=nil;error('partial '..kind)end;backing[k]=v
+ end})
+ local api,c,reload=suppression({proxy})
+ if kind=='apply' then failing='Key';assert(not pcall(function()api:Apply({c})end))
+ else api:Apply({c});failing='SettingBehavior';assert(not pcall(function()api:Restore()end)) end
+ if reloadFirst then api=reload() end
+ assert(api:Restore())
+ assert(backing.Key.KeyName=='One' and backing.SettingBehavior==0)
+end end
+-- Known native keys cannot donate the same original to a second blank row.
+do
+ local first,second=row('One'),row('Two')
+ local api,c=suppression({first,second});api:Apply({c})
+ first.Key={KeyName='One'};first.SettingBehavior=0
+ table.insert(c.Mappings,1,{Action=other,Key={KeyName='Q'},SettingBehavior=0})
+ api:Invalidate(c);api:Apply({c});api:Restore()
+ assert(first.Key.KeyName=='One' and second.Key.KeyName=='Two')
+end
+-- Restore failure cannot take ownership of a separate external behavior change.
+do
+ local backing=row('One');local fail=false
+ local proxy=setmetatable({}, {__index=backing,__newindex=function(_,k,v)
+  if fail and k=='Key' then fail=false;error('restore write failed')end;backing[k]=v
+ end})
+ local second=row('Two');local api,c,reload=suppression({proxy,second});api:Apply({c})
+ second.Key={KeyName='Two'};second.SettingBehavior=1
+ fail=true;assert(not pcall(function()api:Restore()end));api=reload();api:Restore()
+ assert(backing.SettingBehavior==0 and second.SettingBehavior==1)
+end
+-- Dead completed contexts are collectable during ordinary subsequent setup.
+do
+ local timers={};local weak=setmetatable({}, {__mode='v'})
+ local api=dofile('Scripts/widget_setup.lua')({valid=function(o)return o and o.valid end,enabled=function()return true end,
+ key=function(o)return o.id end,queue=function(f)f()end,delay=function(_,f)timers[#timers+1]=f end,
+ run=function()return true end,log=error})
+ for i=1,1000 do
+  local context={id='hud'..i,valid=true};weak[i]=context
+  api:Request(context,'hud');table.remove(timers,1)();context.valid=false
+ end
+ collectgarbage('collect');local retained=0;for _ in pairs(weak)do retained=retained+1 end
+ assert(retained<=1,'completed cache must release obsolete contexts without global invalidation')
+end
+print('PASS direct Restore/reload, one-to-one duplicate provenance, external state preservation and bounded completed cache')

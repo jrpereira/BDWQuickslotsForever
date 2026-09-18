@@ -83,6 +83,21 @@ return function(e)
           'Ambiguous suppressed mappings; native Controls reset required: '..path..' '..r.action)
       end
     end
+    -- Reserve visible keys one-to-one before assigning originals to blank rows.
+    -- Otherwise an unchanged native key can be reused by a different mapping.
+    local reserved={}
+    for _,row in ipairs(rows) do
+      if not suppressed(row.mapping) then
+        local chosen
+        for j,r in ipairs(prior) do
+          if not used[j] and matches(r,row) and r.key==e.key(row.mapping) then
+            chosen=chosen or j
+            if r.index==row.index then chosen=j;break end
+          end
+        end
+        if chosen then used[chosen]=true;reserved[row]=prior[chosen] end
+      end
+    end
     for _,row in ipairs(rows) do
       if suppressed(row.mapping) then
         local chosen
@@ -95,19 +110,19 @@ return function(e)
         if chosen then
           used[chosen]=true
           local r=prior[chosen]
+          row.journal=r
           row.original={context=path,index=row.index,action=row.action,key=r.key,
             behavior=r.behavior,signature=row.signature,writing=r.writing}
         end
-      elseif capture then
-        -- The game supplied a new binding: this is now the value to restore.
-        row.original={context=path,index=row.index,action=row.action,key=e.key(row.mapping),
-          behavior=row.mapping.SettingBehavior,signature=row.signature}
-        -- A failed property write is our unfinished transaction, not a new
-        -- native Controls choice. Keep its pre-write behavior across retries.
-        for _,r in ipairs(prior) do
-          if r.writing and matches(r,row) and r.index==row.index and r.key==e.key(row.mapping) then
-            row.original.behavior=r.behavior;row.original.writing=true;break
-          end
+      else
+        local r=reserved[row]
+        local unfinished=r and r.writing and
+          (row.mapping.SettingBehavior==2 or row.mapping.SettingBehavior==r.behavior)
+        if capture or unfinished then
+          row.journal=r
+          row.original={context=path,index=row.index,action=row.action,key=e.key(row.mapping),
+            behavior=unfinished and r.behavior or row.mapping.SettingBehavior,
+            signature=row.signature,writing=unfinished or false}
         end
       end
     end
@@ -151,7 +166,11 @@ return function(e)
     end
     -- Validate every context before restoring any; journal partial restoration
     -- too, so an interrupted disable cannot become a false native baseline.
-    for _,r in pairs(originals) do r.writing=true end
+    for _,plan in ipairs(plans) do
+      for _,row in ipairs(plan.rows) do
+        if row.original and row.journal then row.journal.writing=true end
+      end
+    end
     if next(originals) then save() end
     for _,plan in ipairs(plans) do
       pendingRebuild[plan.path]=plan.context
