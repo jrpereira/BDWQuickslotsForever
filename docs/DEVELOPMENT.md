@@ -4,7 +4,8 @@
 Run from the repository root with Lua 5.4 and Python 3.12:
 
 ```sh
-for test in tests/*_test.lua; do lua5.4 "$test"; done
+python tools/bootstrap.py
+python tools/run-tests.py --lua lua5.4
 python -m unittest discover -s tests -p 'test_*.py' -v
 python tools/package.py
 ```
@@ -14,7 +15,8 @@ and upload a ZIP plus SHA-256 checksum as the `mod-package` Actions artifact.
 These tests do not run Unreal or certify in-game input, rendering, or persistence.
 
 To publish a release, update the Lua VERSION (and QuickslotsForever metadata when
-applicable), commit, and push a branch named `release/vMAJOR.MINOR.PATCH`.
+applicable), commit, and push a branch named `release/vSEMVER`. Supported
+prereleases such as `release/v0.3.54-rc.1` are published as prereleases.
 The release workflow reruns the checks, rejects a version mismatch, and publishes
 the archive and checksum at that exact commit. An existing release/tag is not
 silently overwritten. Only the publishing job receives repository write permission.
@@ -33,5 +35,5 @@ and workspace notes are excluded. No game files or Dawnwalker Mod Menu source ar
 Optional local DMM integration check (requires a separately installed DMM; its source is not bundled or required by CI):
 
 ```sh
-lua5.4 tests/dmm_metadata_integration.lua "path/to/DawnwalkerModMenu/Scripts/choices.lua"
+python tools/run-tests.py --lua lua5.4 --dmm-choices "path/to/DawnwalkerModMenu/Scripts/choices.lua"
 ```

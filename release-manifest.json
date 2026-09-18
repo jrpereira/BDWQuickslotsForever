@@ -1,0 +1,28 @@
+{
+  "module": "QuickslotsForever",
+  "version_file": "Scripts/main.lua",
+  "version_pattern": "local VERSION\\s*=\\s*[\\\"\\x27]([^\\\"\\x27]+)",
+  "metadata_version_file": "mod_settings.ini",
+  "files": {
+    "Scripts/main.lua": "Scripts/main.lua",
+    "Scripts/persistent_input.lua": "Scripts/persistent_input.lua",
+    "Scripts/runtime_suppression.lua": "Scripts/runtime_suppression.lua",
+    "Scripts/action_indicators.lua": "Scripts/action_indicators.lua",
+    "Scripts/context_registry.lua": "Scripts/context_registry.lua",
+    "Scripts/wheel_layout.lua": "Scripts/wheel_layout.lua",
+    "Scripts/object_paths.lua": "Scripts/object_paths.lua",
+    "Scripts/event_work.lua": "Scripts/event_work.lua",
+    "Scripts/config_notifications.lua": "Scripts/config_notifications.lua",
+    "Scripts/dmm_api.lua": "Scripts/dmm_api.lua",
+    "Scripts/widget_setup.lua": "Scripts/widget_setup.lua",
+    "Scripts/shortcut_targets.lua": "Scripts/shortcut_targets.lua",
+    "Scripts/inventory_navigation.lua": "Scripts/inventory_navigation.lua",
+    "enabled.txt": "enabled.txt",
+    "README.md": "README.md",
+    "CHANGELOG.md": "CHANGELOG.md",
+    "README.txt": "README.txt",
+    "mod_settings.ini": "mod_settings.ini",
+    "config.example.ini": "distribution/config.ini",
+    "tools/Migrate-ShowBothWheels.ps1": "tools/Migrate-ShowBothWheels.ps1"
+  }
+}
