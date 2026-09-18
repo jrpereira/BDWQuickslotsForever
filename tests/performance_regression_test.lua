@@ -14,6 +14,7 @@ local reconfigure=section('local function reconfigure_from_text(now)','local not
 assert(load([[
 local BINDING_GROUPS={"Ability","Consumable"}
 local Config={Enabled=1}
+local PersistentInput={Validate=function()return true end}
 local Enhanced={ready=true}
 local WheelLayout={RestoreAll=function() return true end}
 local restarted,closeCalls=0,0
@@ -34,6 +35,7 @@ print("PASS: failed Close prevents restart")
 assert(load([[
 local BINDING_GROUPS={"Ability","Consumable"}
 local Config={Enabled=1,ShowBothWheels=1}
+local PersistentInput={Validate=function()return true end}
 local Enhanced={ready=true}
 local closeCalls=0
 local function load_config(_) return {Enabled=1,ShowBothWheels=0} end

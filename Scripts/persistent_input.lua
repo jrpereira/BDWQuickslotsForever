@@ -23,8 +23,7 @@ return function(e)
     for _,c in pairs(self.contexts) do if e.same(c,context) then return true end end
     return false
   end
-  function api:Configure(config)
-    objects()
+  function api:Validate(config)
     local plan={}
     for _,group in ipairs({'Ability','Consumable'}) do for slot=1,4 do
       local field=group..slot
@@ -32,6 +31,11 @@ return function(e)
       if config[field]~=0 then key=assert(e.key(config[field]),'Unsupported key: '..field) end
       plan[#plan+1]={field=field,key=key,mode=config[field..'Mode'] or 0}
     end end
+    return plan
+  end
+  function api:Configure(config)
+    local plan=self:Validate(config)
+    objects()
     local context=self.contexts.gameplay
     -- This is our private context, never a native/game context.
     context:UnmapAll()

@@ -35,6 +35,7 @@ return function(e)
         if not current() then return end
         local queued,why=pcall(e.queue,function()
           if not alive() then return end
+          if e.relevant and not e.relevant(context,kind) then stop();return end
           local success,result=pcall(e.run,context,kind)
           if not success then stop();e.log('Wheel setup failed: '..tostring(result));return end
           if result=='children_missing' then schedule()

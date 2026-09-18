@@ -19,8 +19,8 @@ fail=true;assert(not pcall(function()api:Restore()end) and saved~='')
 fail=false;assert(api:Restore() and saved=='' and rebuilds==2)
 assert(native.Mappings[1].Key.KeyName=='None' and native.Mappings[1].SettingBehavior==0)
 assert(native.Mappings[2].Key.KeyName=='One' and native.Mappings[3].Key.KeyName=='Two')
-api:Apply({native});native.Mappings[2].Key.KeyName='External';native.Mappings[2].SettingBehavior=1
-api:Restore();assert(native.Mappings[2].Key.KeyName=='External' and native.Mappings[2].SettingBehavior==1)
+api:Apply({native});native.Mappings[3].Key.KeyName='External';native.Mappings[3].SettingBehavior=1
+api:Restore();assert(native.Mappings[3].Key.KeyName=='External' and native.Mappings[3].SettingBehavior==1)
 print('PASS suppression: None inheritance, all mappings/action, owned exclusions, one rebuild/context, reload journal, failure retry, restoration and external changes')
 
 -- Failed apply rebuild stays dirty even though source fields already changed.

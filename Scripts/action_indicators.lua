@@ -25,9 +25,10 @@ return function(e)
     -- Setup-only pruning bounds the scalar journal as native HUDs are replaced.
     prune()
     local path=e.path(widget)
-    if not originals[path] then
+    local prior=originals[path]
+    if not prior or e.path(widget.EnhancedInputAction)~=prior.assigned then
       originals[path]={original=e.path(widget.EnhancedInputAction),assigned=e.path(action)}
-    else originals[path].assigned=e.path(action) end
+    else prior.assigned=e.path(action) end
     save()
     widget:SetEnhancedInputAction(action)
     return true

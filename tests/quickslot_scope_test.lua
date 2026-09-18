@@ -27,7 +27,7 @@ assert(next(keys)==nil,'bindings defaults contain a non-Quickslot control')
 -- The subsystem intentionally exposes no context-cloning/mapping methods.
 local sub,pc,pawn,pi,input={},{},{},{},{}
 local state={ready=false};local definitions,cleanup=0,0
-local e=setmetatable({Enhanced=state,Config={HoldThresholdMs=200},
+local e=setmetatable({PersistentInput={Validate=function()return true end},Enhanced=state,Config={HoldThresholdMs=200},
   BINDING_GROUPS={'Ability','Consumable'},valid=function(o)return o~=nil end,
   live_subsystem=function()return sub end,find_gameplay_stack=function()return pc,pawn,pi,input end,
   bridge_api=function()return {} end,clear_bridge_bindings=function()return true end,

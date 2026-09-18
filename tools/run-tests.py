@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-TESTS = ['audit_regressions','inventory_navigation','shortcut_targets','routing_lifecycle','suppression_events','widget_setup','config_notifications','startup_lifecycle','persistent_input','action_indicators','runtime_suppression','native_wheel_wiring','inventory_context_hooks','nondebug_bindings','suppression_targets','event_work','event_integration','performance_regression','hot_path','quickslot_scope','object_paths','wheel_layout']
+TESTS = ['audit_safety','audit_regressions','inventory_navigation','shortcut_targets','routing_lifecycle','suppression_events','widget_setup','config_notifications','startup_lifecycle','persistent_input','action_indicators','runtime_suppression','native_wheel_wiring','inventory_context_hooks','nondebug_bindings','suppression_targets','event_work','event_integration','performance_regression','hot_path','quickslot_scope','object_paths','wheel_layout']
 
 def main():
     parser = argparse.ArgumentParser()

@@ -39,7 +39,7 @@ local delayed,queued,steps={},{},{}
 local lastFormat
 local env=setmetatable({scripts='Scripts',Config={Enabled=1,ShowBothWheels=0,SwapAbilitiesWithConsumables=0,
  AbilitiesX=20,AbilitiesY=40,ConsumablesX=40,ConsumablesY=-420},Enhanced={ready=true},
- ShortcutTargets={SetHUD=function()end},SLOT_WIDGET=directions,valid=function(o)return type(o)=='table' and not o.dead end,
+ ShortcutTargets={SetHUD=function()end,GetHUD=function()return hud end},SLOT_WIDGET=directions,valid=function(o)return type(o)=='table' and not o.dead end,
  safe=function(o,k)return o and o[k]end,object_path=function(o)return o.id end,
  fullname=function(o)return (o.class or 'Widget')..' '..o.id end,
  same=function(x,y)return x==y end,belongs=function()return true end,
@@ -82,3 +82,13 @@ assert(not apply(hud,'invalid'))
 indicators:Invalidate();formats:Invalidate();request(hud,'hud');hud.dead=true
 local before=#steps;advance();assert(#steps==before and #delayed==0)
 print('PASS independent setup: format without indicators/input, one-time action assignment, format changes preserve setup, three formats and invalid-context cancellation')
+
+-- A replacement HUD cancels delayed work for the still-valid prior HUD.
+hud.dead=false
+indicators:Invalidate();formats:Invalidate()
+request(hud,'hud')
+env.ShortcutTargets.GetHUD=function()return {id='replacement',class='WBP_GameHUD_C'} end
+local oldSteps=#steps
+advance()
+assert(#steps==oldSteps and #delayed==0,'obsolete valid HUD must not run or reschedule either worker')
+print('PASS actual wheel workers cancel stale HUD setup on owner replacement')

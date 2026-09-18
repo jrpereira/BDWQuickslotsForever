@@ -38,7 +38,7 @@ local env2=setmetatable({Config={Enabled=1},Enhanced=state,
  BINDING_GROUPS={'Ability','Consumable'},LastConfigText='old',
  load_config=function(text)return {Enabled=text=='on' and 1 or 0}end,
  NativeKeys={RestoreAll=function()return true end},WheelLayout={RestoreAll=function()return true end},
- PersistentInput={CloseInventory=function()end},Suppression={Restore=function()end},FormatSetup={Invalidate=function()end},RecoveryWork={Invalidate=function()end,Request=function()end},
+ PersistentInput={Validate=function()return true end,CloseInventory=function()end},Suppression={Restore=function()end},FormatSetup={Invalidate=function()end},RecoveryWork={Invalidate=function()end,Request=function()end},
  valid=function()return false end,live_subsystem=function()return nil end,
  clear_bridge_bindings=function()closes=closes+1;return true end,
  reset_world_visuals=function()end,request_recovery=function()recoveries=recoveries+1 end,log=function()end}, {__index=_G})

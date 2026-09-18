@@ -5,6 +5,15 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.59
+
+- Validate requested keys before replacing active shortcuts; add standard missing keyboard keys including Caps Lock, Backspace, Enter and modifiers.
+- Restore native mappings before the game applies Controls changes. Ambiguous external edits to already-suppressed duplicate mappings retain their journal and report that a native Controls reset is required, rather than guessing keys.
+- Preserve original fields through interrupted suppression/restoration writes and Lua reloads.
+- Cancel pending setup for superseded HUDs/switchers and radial widgets owned by an obsolete player, while preserving readiness retries for current owners.
+- Refresh indicator restoration baselines when the game or another mod changes their action before rewiring.
+- Add targeted behavior regressions. No new timer or per-frame work; native gameplay/FPS validation remains pending.
+
 ## 0.3.58
 
 - Allow individual or all slots to be unbound without preventing other shortcuts from initializing; retained actions can be rebound later.

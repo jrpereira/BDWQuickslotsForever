@@ -47,7 +47,7 @@ do
   local new={Enabled=1,Ability1=50,ShowBothWheels=0}
   local fail=true;local closes,input,hud,inventory,suppress=0,0,0,0,0
   local e=setmetatable({Config=old,LastConfigText='old',BINDING_GROUPS={'Ability','Consumable'},
-    Enhanced={ready=true},load_config=function(text)return text=='old' and old or new end,
+    PersistentInput={Validate=function()return true end},Enhanced={ready=true},load_config=function(text)return text=='old' and old or new end,
     valid=function()return false end,live_subsystem=function()end,
     clear_bridge_bindings=function()closes=closes+1;return true end,
     RequestSuppressionSnapshot=function()end,remove_native_conflicts=function()

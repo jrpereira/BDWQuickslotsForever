@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.58
+-- QuickslotsForever v0.3.59
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.58"
+local VERSION="0.3.59"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -35,6 +35,10 @@ local function parse_ini(text)
 end
 local function iv(ini,sec,key,default) local v=ini[sec] and tonumber(ini[sec][key]); if v==nil then return default end return math.floor(v) end
 local VK_TO_FKEY={
+ [0x08]="BackSpace",[0x0D]="Enter",[0x13]="Pause",[0x14]="CapsLock",[0x1B]="Escape",
+ [0x10]="LeftShift",[0x11]="LeftControl",[0x12]="LeftAlt",
+ [0xA0]="LeftShift",[0xA1]="RightShift",[0xA2]="LeftControl",[0xA3]="RightControl",[0xA4]="LeftAlt",[0xA5]="RightAlt",
+ [0x6A]="Multiply",[0x6B]="Add",[0x6D]="Subtract",[0x6E]="Decimal",[0x6F]="Divide",[0x90]="NumLock",[0x91]="ScrollLock",
  [0x01]="LeftMouseButton",[0x02]="RightMouseButton",[0x04]="MiddleMouseButton",[0x05]="ThumbMouseButton",[0x06]="ThumbMouseButton2",
  [0x30]="Zero",[0x31]="One",[0x32]="Two",[0x33]="Three",[0x34]="Four",[0x35]="Five",[0x36]="Six",[0x37]="Seven",[0x38]="Eight",[0x39]="Nine",
  [0x41]="A",[0x42]="B",[0x43]="C",[0x44]="D",[0x45]="E",[0x46]="F",[0x47]="G",[0x48]="H",[0x49]="I",[0x4A]="J",[0x4B]="K",[0x4C]="L",[0x4D]="M",[0x4E]="N",[0x4F]="O",[0x50]="P",[0x51]="Q",[0x52]="R",[0x53]="S",[0x54]="T",[0x55]="U",[0x56]="V",[0x57]="W",[0x58]="X",[0x59]="Y",[0x5A]="Z",
@@ -565,6 +569,7 @@ local function setup_enhanced_input()
     return false
   end
   Enhanced.bridgeError=nil
+  PersistentInput:Validate(Config)
   local cleared,clearErr=clear_bridge_bindings()
   if not cleared then log("Enhanced Input: "..tostring(clearErr)); return false end
   SuppressionNeedsSnapshot=true
@@ -786,6 +791,17 @@ end
 local function setup_worker(run,remember_success)
   return dofile(scripts..'/widget_setup.lua')({
     valid=valid,key=function(o,kind) return object_path(kind=='radial' and o or owning_hud(o) or o) end,
+    relevant=function(o,kind)
+      local h=kind=='hud' and o or owning_hud(o)
+      local current=ShortcutTargets:GetHUD()
+      if valid(h) and valid(current) and not same(h,current) then return false end
+      if kind=='switcher' and valid(h) and not same(safe(h,'QuickslotsSwitcher'),o) then return false end
+      if kind=='radial' and valid(Enhanced.controller) then
+        local ok,owner=pcall(function() return o:GetOwningPlayer() end)
+        if ok and valid(owner) and not same(owner,Enhanced.controller) then return false end
+      end
+      return true
+    end,
     signature=remember_success~=false and function(o,kind)
       local widgets={}
       if kind=='radial' then
@@ -932,9 +948,15 @@ do
   recovery_hook('/Script/Engine.PlayerController:ClientRestart',request_recovery)
   recovery_hook('/Script/Engine.PlayerController:ClientRetryClientRestart',request_recovery)
   recovery_hook('/Script/Engine.Controller:OnRep_Pawn',request_recovery)
-  recovery_hook('/Script/RebelInput.RebelInputMappingSubsystem:ApplyPendingKeyboardMappings',function()
-    RequestSuppressionSnapshot(true)
-  end)
+  local remapOK,remapError=pcall(RegisterHook,
+    '/Script/RebelInput.RebelInputMappingSubsystem:ApplyPendingKeyboardMappings',
+    function()
+      if Config.Enabled==0 then return end
+      local ok,err=pcall(function() Suppression:Restore() end)
+      if not ok then log('Native binding restoration before Controls update failed: '..tostring(err)) end
+    end,
+    function() RequestSuppressionSnapshot(true) end)
+  if not remapOK then log('Controls remap hook unavailable: '..tostring(remapError)) end
   -- Suppress a newly applied native context before it enters the active set.
   -- RequestRebuildControlMappingsUsingContext never calls AddMappingContext.
   local okSuppressHook,suppressHookError=pcall(RegisterHook,
@@ -981,8 +1003,9 @@ local function reconfigure_from_text(now)
   local retrying=PendingConfigBaseline~=nil
   if retrying and IndicatorSetup then IndicatorSetup:Invalidate() end
   local previous=PendingConfigBaseline or Config
-  PendingConfigBaseline=previous
   local updated=load_config(now)
+  if updated.Enabled~=0 then PersistentInput:Validate(updated) end
+  PendingConfigBaseline=previous
   if updated.Enabled~=previous.Enabled and updated.Enabled==0 then
     if NativeKeys then
       local restored,why=NativeKeys:RestoreAll()
