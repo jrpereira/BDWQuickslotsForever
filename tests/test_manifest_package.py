@@ -16,6 +16,24 @@ class ManifestPackageTests(unittest.TestCase):
         for value in ['01.2.3', '1.2.3-rc.01', '1.2', 'v1.2.3', '1.2.3/other']:
             self.assertFalse(package_manifest.valid_version(value), value)
 
+    def test_rejects_tools_directories_at_any_depth_and_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'main.lua').write_text('local VERSION="1.2.3"')
+            spec = {'module': 'Example', 'version_file': 'main.lua',
+                    'version_pattern': 'VERSION="([^"]+)"', 'files': {}}
+            for destination in ['Tools/task.ps1', 'tools/task.ps1',
+                                'nested/ToOlS/task.ps1', r'nested\TOOLS\task.ps1']:
+                with self.subTest(destination=destination):
+                    spec['files'] = {destination: 'main.lua'}
+                    (root / 'release-manifest.json').write_text(json.dumps(spec))
+                    with self.assertRaisesRegex(ValueError, 'Tools directory'):
+                        package_manifest.build(root)
+            spec.update(module='ToOlS', files={'main.lua': 'main.lua'})
+            (root / 'release-manifest.json').write_text(json.dumps(spec))
+            with self.assertRaisesRegex(ValueError, 'Tools directory'):
+                package_manifest.build(root)
+
     def test_manifest_excludes_extra_files_and_rejects_missing_required_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

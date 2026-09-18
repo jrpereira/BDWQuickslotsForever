@@ -2,6 +2,13 @@
 
 Use the latest release for current fixes. Historical releases retain the behavior and limitations described below.
 
+## 0.3.62
+
+- Remove development and migration tools from the installable ZIP.
+- Reject Tools directories at every nesting level, regardless of capitalization.
+- Explain older wheel configuration upgrades through the mod menu or a manual configuration edit.
+- Keep gameplay behavior unchanged from 0.3.61.
+
 ## 0.3.61
 
 - Remove unused routing calculations from input recovery.

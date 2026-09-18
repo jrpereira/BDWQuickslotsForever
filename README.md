@@ -48,17 +48,12 @@ Install these separately; the download contains QuickslotsForever only.
 
 ### Upgrading an older wheel configuration
 
-If your older configuration is missing the Show Both Wheels setting, the included
-migration adds it without replacing your other settings. From the extracted
-archive folder, run this in PowerShell 7, replacing the example path:
+If your older configuration is missing Show Both Wheels, enable Show Both in the
+mod menu and select Apply Changes. Keep your other settings and existing shortcuts.
 
-```powershell
-pwsh -File QuickslotsForever/tools/Migrate-ShowBothWheels.ps1 -ConfigPath "path/to/ue4ss/Mods/QuickslotsForever/config.ini"
-```
-
-The script backs up your file and adds `ShowBothWheels=1` only if it is missing.
-It preserves an existing On/Off choice. Fresh installations using the example
-configuration do not need this step.
+If editing the file manually, back up `config.ini`, then add `ShowBothWheels=1`
+under `[General]` only if that setting is missing. Preserve any existing On/Off
+choice. Fresh installations using the example configuration do not need this step.
 
 ## Choose your shortcuts
 
@@ -123,7 +118,7 @@ inputs, so you do not have to hold a gameplay shortcut to assign an item.
 - **A menu edit does not stick:** select Apply Changes, then reopen the page to
   check that your choice was saved.
 - **Wheel position settings are missing:** turn on Show Both. For an older
-  configuration missing that setting, use the migration above.
+  configuration missing that setting, follow the upgrade steps above.
 - **After an upgrade:** fully restart the game before trying the new version.
 
 Unsupported key choices are rejected without replacing your working shortcuts.

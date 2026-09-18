@@ -25,6 +25,8 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(archive.with_suffix('.zip.sha256').read_text().split()[0], hashlib.sha256(before).hexdigest())
             with ZipFile(archive) as bundle:
                 names = bundle.namelist()
+                self.assertFalse(any(part.casefold() == 'tools'
+                                     for name in names for part in name.split('/')[:-1]))
                 self.assertIn(pack.MODULE + '/Scripts/main.lua', names)
                 self.assertIn(pack.MODULE + '/enabled.txt', names)
                 self.assertNotIn(pack.MODULE + '/Scripts/temporary_probe.lua', names)

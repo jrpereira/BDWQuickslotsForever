@@ -38,8 +38,12 @@ def build(root, out=None, expected=None):
     module = spec['module']
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', module):
         raise ValueError('Invalid module name')
+    if module.casefold() == 'tools':
+        raise ValueError('Release ZIP must not contain a Tools directory')
     payload = {}
     for dest, src in spec['files'].items():
+        if any(part.casefold() == 'tools' for part in dest.replace('\\', '/').split('/')[:-1]):
+            raise ValueError('Release ZIP must not contain a Tools directory')
         safe_file(root, dest)
         if Path(dest).name.lower() == 'config.ini':
             raise ValueError('Never package a personal config destination; use config.example.ini')
