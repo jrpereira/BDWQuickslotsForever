@@ -21,8 +21,8 @@ def main():
     failed = []
     for rel in manifest['files'].values():
         if rel.endswith('.lua'):
-            env = dict(os.environ, EC_SYNTAX_FILE=str(ROOT / rel))
-            result = subprocess.run([args.lua, '-e', 'assert(loadfile(os.getenv("EC_SYNTAX_FILE")))'], cwd=ROOT, env=env)
+            env = dict(os.environ, QSF_SYNTAX_FILE=str(ROOT / rel))
+            result = subprocess.run([args.lua, '-e', 'assert(loadfile(os.getenv("QSF_SYNTAX_FILE")))'], cwd=ROOT, env=env)
             if result.returncode:
                 failed.append('syntax:' + rel)
     for name in TESTS:
