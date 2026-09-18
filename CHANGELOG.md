@@ -5,6 +5,12 @@ snapshots. Milestone commits preserve source with Git's configured line-ending
 normalization; they do not claim that
 historical tests or release records were recovered.
 
+## 0.3.57
+
+- Rewrite both distributed READMEs for players, emphasizing dedicated shortcuts, Tap/Hold and optional wheel visibility.
+- Apply the new READMEs throughout the Git history while preserving development commits and code changes. Commit IDs have changed; previous release downloads are retired.
+- Gameplay behavior and known issues from 0.3.56 are unchanged.
+
 ## 0.3.56
 
 - Always suppress conflicting native Quickslot and wheel-swap bindings while enabled; remove the separate menu option and ignore its legacy config value.
