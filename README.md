@@ -111,6 +111,8 @@ Abilities as your **Primary Wheel**. Use **Primary X/Y** and **Secondary X/Y**
 in **More Options**, at the bottom of the page, to adjust their positions.
 The primary position starts lower, with the secondary above it. Changing primary
 exchanges the wheels between those positions without changing their shortcuts.
+The **Primary Visuals** and **Secondary** subsections also control each wheel's
+size and opacity. Defaults are 100%/100% for Primary and 70%/80% for Secondary.
 
 Choose **One** to keep the native single-wheel layout. Selective changes which
 wheel is shown; Independent shortcuts continue to address either wheel directly.

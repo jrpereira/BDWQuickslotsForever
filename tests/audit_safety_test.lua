@@ -27,7 +27,12 @@ for _,swap in ipairs({0,1})do
 end
 assert(loadconfig('[General]\nShowBothWheels=1\nShowWheels=1').ShowBothWheels==0)
 assert(loadconfig('[More Options]\nConsumablesX=91').SecondaryX==91,'intermediate edited schema X key remains readable')
-print('PASS schema precedence, explicit primary, legacy coordinates and global threshold')
+local visuals=loadconfig('[More Options]\nPrimarySize=500\nPrimaryOpacity=-2\nSecondarySize=10\nSecondaryOpacity=120')
+assert(visuals.PrimarySize==200 and visuals.PrimaryOpacity==0 and visuals.SecondarySize==25 and visuals.SecondaryOpacity==100,
+ 'visual ranges must remain safe for manually edited configuration')
+local defaults=loadconfig('')
+assert(defaults.PrimarySize==100 and defaults.PrimaryOpacity==100 and defaults.SecondarySize==70 and defaults.SecondaryOpacity==80)
+print('PASS schema precedence, explicit primary, legacy coordinates, visual defaults/ranges and global threshold')
 local input=dofile('Scripts/persistent_input.lua')({key=function(k)return keys[k]end})
 local good=loadconfig(read('distribution/config.ini'));good.Ability1=20
 assert(input:Validate(good)[1].key=='CapsLock')

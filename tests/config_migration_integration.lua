@@ -43,7 +43,8 @@ for _,show in ipairs({'missing','0','1'})do
      local plan=init.plan(provider,manifest,choices,fs)
      lines_preserved(text,plan.content)
      local before,after=loadconfig(text),loadconfig(plan.content)
-     for _,field in ipairs({'PrimaryWheel','ShowBothWheels','HoldThresholdMs','PrimaryX','PrimaryY','SecondaryX','SecondaryY'})do
+     for _,field in ipairs({'PrimaryWheel','ShowBothWheels','HoldThresholdMs','PrimaryX','PrimaryY','SecondaryX','SecondaryY',
+         'PrimarySize','PrimaryOpacity','SecondarySize','SecondaryOpacity'})do
       assert(before[field]==after[field],field..' changed during migration '..primary..'/'..swap)
      end
      for _,group in ipairs({'Ability','Consumable'})do for slot=1,4 do for _,suffix in ipairs({'','Mode'})do
@@ -57,7 +58,8 @@ for _,show in ipairs({'missing','0','1'})do
      local model=choices.open(provider);assert(not model.error,model.error)
      local byId={};for i,row in ipairs(settings)do byId[row.id]=i end
      assert(model.pending[byId.ShowWheels]==(before.ShowBothWheels==0 and 1 or 2))
-     for _,key in ipairs({'PrimaryWheel','PrimaryX','PrimaryY','SecondaryX','SecondaryY','HoldThresholdMs'})do
+     for _,key in ipairs({'PrimaryWheel','PrimaryX','PrimaryY','SecondaryX','SecondaryY','PrimarySize','PrimaryOpacity',
+         'SecondarySize','SecondaryOpacity','HoldThresholdMs'})do
       assert(model.pending[byId[key]]==before[key],key..' differs in menu')
      end
      model:set(byId.HoldThresholdMs,400);assert(model:apply())

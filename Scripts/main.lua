@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.65
+-- QuickslotsForever v0.3.66
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.65"
+local VERSION="0.3.66"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -90,6 +90,10 @@ local function load_config(text)
   c.PrimaryY=iv(ini,"More Options","PrimaryY",py)
   c.SecondaryX=iv(ini,"More Options","SecondaryX",iv(ini,"More Options","ConsumablesX",sx))
   c.SecondaryY=iv(ini,"More Options","SecondaryY",sy)
+  c.PrimarySize=math.max(25,math.min(200,iv(ini,"More Options","PrimarySize",100)))
+  c.PrimaryOpacity=math.max(0,math.min(100,iv(ini,"More Options","PrimaryOpacity",100)))
+  c.SecondarySize=math.max(25,math.min(200,iv(ini,"More Options","SecondarySize",70)))
+  c.SecondaryOpacity=math.max(0,math.min(100,iv(ini,"More Options","SecondaryOpacity",80)))
   c.InteractionMode=iv(ini,"General","InteractionMode",0)==1 and 1 or 0
   c.SecondaryWheelKey=iv(ini,"Bindings","SecondaryWheelKey",164)
   c.SecondaryWheelMode=iv(ini,"Bindings","SecondaryWheelMode",2)==0 and 0 or 2
@@ -816,7 +820,8 @@ local function apply_wheel_format(h,format)
   local primary=Config.PrimaryWheel==1 and ability or consumable
   local secondary=Config.PrimaryWheel==1 and consumable or ability
   local ok,err=WheelLayout:Update(h,switcher,ability,consumable,format~='single',primary,secondary,
-    Config.PrimaryX,Config.PrimaryY,Config.SecondaryX,Config.SecondaryY)
+    Config.PrimaryX,Config.PrimaryY,Config.SecondaryX,Config.SecondaryY,
+    Config.PrimarySize,Config.PrimaryOpacity,Config.SecondarySize,Config.SecondaryOpacity)
   if not ok then log('Wheel format failed: '..tostring(err));return end
   if format~='single' then hide_swap_prompt(h,ability)
   else
@@ -1131,7 +1136,8 @@ local function reconfigure_from_text(now)
     end
   end
   local formatChanged=retrying or updated.Enabled~=previous.Enabled
-  for _,field in ipairs({'ShowBothWheels','PrimaryWheel','InteractionMode','PrimaryX','PrimaryY','SecondaryX','SecondaryY'}) do
+  for _,field in ipairs({'ShowBothWheels','PrimaryWheel','InteractionMode','PrimaryX','PrimaryY','SecondaryX','SecondaryY',
+      'PrimarySize','PrimaryOpacity','SecondarySize','SecondaryOpacity'}) do
     if updated[field]~=previous[field] then formatChanged=true end
   end
   if formatChanged then FormatSetup:Invalidate() end

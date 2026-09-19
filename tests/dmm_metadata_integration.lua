@@ -9,15 +9,15 @@ options={}
 for i,row in ipairs(settings) do
   if row.id=="ShowWheels" then display=i; assert(row.default==2 and row.group=="General Settings") end
   assert(row.group~="Visuals" and row.group~="Wheels")
-  if row.group=="More Options" then options[#options+1]=i end
+  if row.group=="More Options" or row.group=="Primary Visuals" or row.group=="Secondary" then options[#options+1]=i end
 end
-assert(display and #options==5,"display selector and threshold plus four offsets")
+assert(display and #options==9,"display selector and threshold plus eight visual controls")
 for _,value in ipairs({1,2}) do
   model:set(display,value)
   local visible=model:visibility()
   for _,i in ipairs(options)do assert(visible[i],'More Options stays available in either layout')end
 end
-print("PASS: real Mod Menu display selector and bottom More Options category")
+print("PASS: real Mod Menu display selector and bottom visual categories")
 
 local byId={};for i,row in ipairs(settings)do byId[row.id]=i end
 local interaction=assert(byId.InteractionMode)

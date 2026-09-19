@@ -21,18 +21,22 @@ local expected={}
 for _,group in ipairs({'Ability','Consumable'})do
   for slot=1,4 do expected[#expected+1]=group..slot;expected[#expected+1]=group..slot..'Mode' end
 end
-local groups={['General Settings']=true,['More Options']=true,Selective=true,Abilities=true,Consumables=true}
+local groups={['General Settings']=true,['More Options']=true,['Primary Visuals']=true,Secondary=true,
+  Selective=true,Abilities=true,Consumables=true}
 for group in metadata:gmatch('Group = ([^\r\n]+)')do assert(groups[group],'unexpected menu section: '..group)end
 assert(not metadata:find('[Setting.SwapAbilitiesWithConsumables]',1,true),'PrimaryWheel is the sole public selection')
-local finalCategory
-for category in metadata:gmatch('%[Category%.([^%]]+)%]')do finalCategory=category end
-assert(finalCategory=='More Options','layout settings belong at the bottom')
+local categoryOrder={};for category in metadata:gmatch('%[Category%.([^%]]+)%]')do categoryOrder[#categoryOrder+1]=category end
+assert(categoryOrder[#categoryOrder-2]=='More Options' and categoryOrder[#categoryOrder-1]=='Primary Visuals'
+  and categoryOrder[#categoryOrder]=='Secondary','visual settings belong at the bottom in role order')
 local primaryX=assert(metadata:find('[Setting.PrimaryX]',1,true))
 local primaryY=assert(metadata:find('[Setting.PrimaryY]',1,true))
 local secondaryX=assert(metadata:find('[Setting.SecondaryX]',1,true))
 local secondaryY=assert(metadata:find('[Setting.SecondaryY]',1,true))
 assert(primaryX<primaryY and primaryY<secondaryX and secondaryX<secondaryY,
   'position controls must present Primary before Secondary')
+for _,id in ipairs({'PrimarySize','PrimaryOpacity','SecondarySize','SecondaryOpacity'})do
+  assert(metadata:find('[Setting.'..id..']',1,true),'missing visual setting '..id)
+end
 local defaults=read('distribution/config.ini'):match('%[Bindings%]%s*(.-)%[Presets%]')
 local keys={};for k in defaults:gmatch('([%w]+)=')do keys[k]=true end
 for _,k in ipairs(expected)do assert(keys[k],'missing default '..k);keys[k]=nil end

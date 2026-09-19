@@ -2,6 +2,11 @@
 
 Use the latest release for current fixes. Historical releases retain the behavior and limitations described below.
 
+## 0.3.66
+
+- Add separate Size and Opacity controls for Primary and Secondary wheels.
+- Present Primary and Secondary visual controls in Level 4 subsections with concise field labels.
+
 ## 0.3.65
 
 - Replace the former three interaction choices with Independent and Selective.
