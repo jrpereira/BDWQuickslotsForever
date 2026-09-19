@@ -1,6 +1,7 @@
 -- Mod-owned objects have process lifetime. Only subscriptions/active contexts
 -- follow the current player. Key changes never replace an InputAction.
 return function(e)
+  local MODE_TAP_TRIGGER,MODE_HOLD_SUSTAINED=0,2
   local api={actions={},contexts={},target=nil,sub=nil,inventorySub=nil}
   local options={bIgnoreAllPressedKeysUntilRelease=true,bForceImmediately=false,bNotifyUserSettings=false}
   local journal=e.load_inventory and e.load_inventory()
@@ -12,11 +13,11 @@ return function(e)
       local c=e.resolve(context);if e.valid(c) then api.contexts.inventory=c end
     end
   end
-  local function objects()
+  local function objects(plan)
     if not api.contexts.gameplay then api.contexts.gameplay=e.retain('InputMappingContext','IMC_QuickslotsForever') end
-    for _,group in ipairs({'Ability','Consumable'}) do for slot=1,4 do
-      local field=group..slot
-      if not api.actions[field] then api.actions[field]=e.retain('InputAction','IA_'..group..'Slot'..slot) end
+    for _,p in ipairs(plan) do if not api.actions[p.field] then
+      local name=p.group and ('IA_'..p.group..'Slot'..p.slot) or ('IA_QuickslotsForever_'..p.field)
+      api.actions[p.field]=e.retain('InputAction',name)
     end end
   end
   function api:Owns(context)
@@ -25,24 +26,51 @@ return function(e)
   end
   function api:Validate(config)
     local plan={}
-    for _,group in ipairs({'Ability','Consumable'}) do for slot=1,4 do
-      local field=group..slot
-      local key
-      if config[field]~=0 then key=assert(e.key(config[field]),'Unsupported key: '..field) end
-      plan[#plan+1]={field=field,key=key,mode=config[field..'Mode'] or 0}
-    end end
+    local interaction=config.InteractionMode or 0
+    assert(interaction==0 or interaction==1,'Invalid interaction mode')
+    local selectiveMode=config.SecondaryWheelMode==MODE_TAP_TRIGGER and MODE_TAP_TRIGGER or MODE_HOLD_SUSTAINED
+    assert(interaction==0 or selectiveMode==MODE_TAP_TRIGGER or selectiveMode==MODE_HOLD_SUSTAINED,'Invalid Secondary Wheel mode')
+    if interaction==1 and selectiveMode==MODE_HOLD_SUSTAINED then
+      local bridge=e.bridge()
+      local caps=bridge.GetCapabilities and bridge.GetCapabilities()
+      assert(caps and caps.target_delivery_faults==true
+        and type(bridge.SetTargetDeliveryFaultHandler)=='function' and type(bridge.IsTargetDeliveryValid)=='function',
+        'Selective Hold requires native target delivery fault protection')
+    end
+    if interaction==0 then
+      for _,group in ipairs({'Ability','Consumable'}) do for slot=1,4 do
+        local field=group..slot
+        local key=config[field]~=0 and assert(e.key(config[field]),'Unsupported key: '..field) or nil
+        plan[#plan+1]={field=field,group=group,slot=slot,key=key,mode=config[field..'Mode'] or 0,
+          threshold=(config.HoldThresholdMs or 200)/1000}
+      end end
+    end
+    if interaction==1 then
+      local mode=selectiveMode
+      local secondary=config.SecondaryWheelKey or 164
+      plan[#plan+1]={field='SecondaryWheelKey',key=secondary~=0 and assert(e.key(secondary),'Unsupported Secondary Wheel key') or nil,
+        mode=mode,threshold=(config.HoldThresholdMs or 200)/1000}
+      if mode==MODE_TAP_TRIGGER then
+        local primary=config.PrimaryWheelKey or 0
+        local primaryKey=primary~=0 and assert(e.key(primary),'Unsupported Primary Wheel key') or nil
+        assert(not primaryKey or not plan[#plan].key or primaryKey~=plan[#plan].key,'Wheel selection keys must differ')
+        plan[#plan+1]={field='PrimaryWheelKey',key=primaryKey,mode=MODE_TAP_TRIGGER,threshold=(config.HoldThresholdMs or 200)/1000}
+      end
+    end
     return plan
   end
   function api:Configure(config)
     local plan=self:Validate(config)
-    objects()
+    objects(plan)
+    self.interaction=config.InteractionMode or 0
+    self.secondaryWheelMode=config.SecondaryWheelMode==MODE_TAP_TRIGGER and MODE_TAP_TRIGGER or MODE_HOLD_SUSTAINED
     local context=self.contexts.gameplay
     -- This is our private context, never a native/game context.
     context:UnmapAll()
     for _,p in ipairs(plan) do
-      local a=self.actions[p.field]
+      local a=assert(self.actions[p.field],'Persistent action missing')
       a.ValueType=0;a.bConsumeInput=false;a.bTriggerWhenPaused=false
-      e.trigger(a,p.mode,config.HoldThresholdMs/1000)
+      e.trigger(a,p.mode,p.threshold)
       if p.key then context:MapKey(a,{KeyName=e.name(p.key)}) end
     end
     e.each(context.Mappings,function(_,m) m.SettingBehavior=2 end)
@@ -52,21 +80,42 @@ return function(e)
       local ok,err=e.bridge().CloseInputComponent(self.target)
       if not ok then return false,err end
       self.target=nil
+      self.deliveryGuard=false
     end
     if e.valid(self.sub) and self.contexts.gameplay then self.sub:RemoveMappingContext(self.contexts.gameplay,options) end
     self.sub=nil
     return true
+  end
+  function api:IsDeliveryValid(target)
+    if target~=self.target then return false end
+    if not self.deliveryGuard then return not (self.interaction==1 and self.secondaryWheelMode==MODE_HOLD_SUSTAINED) end
+    local ok,healthy=pcall(e.bridge().IsTargetDeliveryValid,target)
+    return ok and healthy==true
   end
   function api:Bind(input,sub,defs,callback)
     local bridge=e.bridge()
     local target,err=bridge.OpenInputComponent(e.path(input))
     if not target then return false,err end
     self.target=target;self.sub=sub
+    self.deliveryGuard=false
+    local caps=bridge.GetCapabilities and bridge.GetCapabilities()
+    if caps and caps.target_delivery_faults==true then
+      local guarded,why=bridge.SetTargetDeliveryFaultHandler(target,function(event)
+        if self.target==target and e.delivery_fault then e.delivery_fault(target,event.reason) end
+      end)
+      if not guarded then self:Close();return false,why end
+      self.deliveryGuard=true
+    elseif self.interaction==1 and self.secondaryWheelMode==MODE_HOLD_SUSTAINED then
+      self:Close();return false,'Native target delivery fault protection is required'
+    end
     for _,entry in ipairs(defs) do
       local action=assert(self.actions[entry.field],'Persistent action missing')
       e.initialize_identity(action)
-      local handle,why=bridge.BindAction(target,e.path(action),'Triggered',callback(entry))
-      if not handle then self:Close();return false,why end
+      local phases=entry.momentary and {'Started','Completed','Canceled'} or {'Triggered'}
+      for _,phase in ipairs(phases) do
+        local handle,why=bridge.BindAction(target,e.path(action),phase,callback(entry,phase))
+        if not handle then self:Close();return false,why end
+      end
     end
     sub:AddMappingContext(self.contexts.gameplay,10000,options)
     return true

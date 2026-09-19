@@ -48,7 +48,7 @@ return function(e)
     for _,r in pairs(originals) do if r.context==path then prior[#prior+1]=r end end
     table.sort(prior,function(a,b) return a.index<b.index end)
     e.each(c.Mappings,function(i,m)
-      if e.target(m.Action) then
+      if e.target(m.Action,capture) then
         rows[#rows+1]={index=i,mapping=m,action=e.path(m.Action),
           signature=e.signature and e.signature(m) or ''}
       end

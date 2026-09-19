@@ -37,15 +37,16 @@ hud.WBP_AA_Quickslots={WBP_AA_Quickslots_Bindings=bindings()}
 hud.WBP_HUD_Quickslots={WBP_HUD_Quickslots_Bindings=bindings()}
 local delayed,queued,steps={},{},{}
 local lastFormat
-local env=setmetatable({scripts='Scripts',Config={Enabled=1,ShowBothWheels=0,SwapAbilitiesWithConsumables=0,
- AbilitiesX=20,AbilitiesY=40,ConsumablesX=40,ConsumablesY=-420},Enhanced={ready=true},
+local env=setmetatable({scripts='Scripts',Config={Enabled=1,ShowBothWheels=0,PrimaryWheel=0,InteractionMode=0,
+ PrimaryX=20,PrimaryY=40,SecondaryX=40,SecondaryY=-420},Enhanced={ready=true},
  ShortcutTargets={SetHUD=function()end,GetHUD=function()return hud end},SLOT_WIDGET=directions,valid=function(o)return type(o)=='table' and not o.dead end,
  safe=function(o,k)return o and o[k]end,object_path=function(o)return o.id end,
  fullname=function(o)return (o.class or 'Widget')..' '..o.id end,
  same=function(x,y)return x==y end,belongs=function()return true end,
  bindings_widget=function(o,props)for _,key in ipairs(props)do if o[key] then return o[key]end end end,
- WheelLayout={Update=function(_,h,s,ability,consumable,both,ax,ay,cx,cy)
-  steps[#steps+1]='layout';lastFormat={both=both,ay=ay,cy=cy};return true end},
+ WheelLayout={Update=function(_,h,s,ability,consumable,both,primary,secondary,px,py,sx,sy)
+  steps[#steps+1]='layout';lastFormat={both=both,primary=primary,secondary=secondary,py=py,sy=sy};return true end,
+ SelectWheel=function(_,s,w)lastFormat.selected=w;return true end},
  hide_swap_prompt=function()end,
  override_icons=function()steps[#steps+1]='actions';return 8 end,
  ExecuteWithDelay=function(_,fn)delayed[#delayed+1]=fn end,
@@ -74,10 +75,16 @@ assert(steps[beforeReplacement+1]=='actions' and steps[beforeReplacement+2]=='la
 request(hud,'hud');assert(#delayed==1,'unchanged replacement indicators remain once-only');advance()
 env.Enhanced.ready=false
 assert(desired()=='single' and apply(hud,desired()) and not lastFormat.both)
+assert(lastFormat.selected==hud.WBP_HUD_Quickslots)
+env.Config.PrimaryWheel=1;assert(apply(hud,desired()))
+assert(lastFormat.selected==hud.WBP_AA_Quickslots)
+env.Config.PrimaryWheel=0
 env.Config.ShowBothWheels=1
-assert(desired()=='consumables_above' and apply(hud,desired()) and lastFormat.cy<lastFormat.ay)
-env.Config.SwapAbilitiesWithConsumables=1
-assert(desired()=='abilities_above' and apply(hud,desired()) and lastFormat.ay<lastFormat.cy)
+assert(desired()=='abilities_above' and apply(hud,desired()))
+assert(lastFormat.primary==hud.WBP_HUD_Quickslots and lastFormat.secondary==hud.WBP_AA_Quickslots and lastFormat.sy<lastFormat.py)
+env.Config.PrimaryWheel=1
+assert(desired()=='consumables_above' and apply(hud,desired()))
+assert(lastFormat.primary==hud.WBP_AA_Quickslots and lastFormat.secondary==hud.WBP_HUD_Quickslots and lastFormat.sy<lastFormat.py)
 assert(not apply(hud,'invalid'))
 indicators:Invalidate();formats:Invalidate();request(hud,'hud');hud.dead=true
 local before=#steps;advance();assert(#steps==before and #delayed==0)

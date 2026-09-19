@@ -11,7 +11,7 @@ local function wheel(n,nested)
 end
 local hudA,hudC=wheel('hudAbility'),wheel('hudConsumable')
 local radials={wheel('floatOne',true),wheel('floatTwo',true)}
-local env={SLOT_WIDGET=directions,valid=function(o)return o~=nil end,safe=function(o,k)return o and o[k]end,
+local env={Config={InteractionMode=0},SLOT_WIDGET=directions,valid=function(o)return o~=nil end,safe=function(o,k)return o and o[k]end,
  Enhanced={ready=true},PersistentInput={actions={}},NativeKeys={Set=function(_,w,act)if not w or not act then return false end;assigned[w.id]=act;return true end},
  RadialPaths={Visit=function(_,fn)for _,w in ipairs(radials)do fn(w)end end},log=function()end}
 for _,g in ipairs({'Ability','Consumable'})do for i=1,4 do env.PersistentInput.actions[g..i]={name='IA_'..g..'Slot'..i}end end

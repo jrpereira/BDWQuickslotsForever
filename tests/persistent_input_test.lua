@@ -85,3 +85,15 @@ api:Configure(config)
 assert(#api.contexts.gameplay.Mappings==1 and api.contexts.gameplay.Mappings[1].Action==original)
 assert(api.contexts.gameplay.Mappings[1].Key.KeyName=='Restored')
 print('PASS unbound slots: one/all empty, remaining shortcuts preserved and retained action can be rebound')
+
+-- Obsolete wheel thresholds must never override the user's global threshold.
+config.HoldThresholdMs=375;config.PrimaryHoldThresholdMs=150;config.SecondaryHoldThresholdMs=450
+for primary=0,1 do
+ config.PrimaryWheel=primary;api:Configure(config)
+ for _,group in ipairs({'Ability','Consumable'})do for slot=1,4 do
+  assert(api.actions[group..slot].threshold==0.375)
+ end end
+ assert(api.actions.Ability1==original and constructed==10)
+ assert(api.contexts.gameplay.Mappings[1].Key.KeyName=='Restored')
+end
+print('PASS global threshold ignores obsolete values and survives primary changes with stable bindings/actions')

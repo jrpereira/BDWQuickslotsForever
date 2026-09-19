@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.62
+-- QuickslotsForever v0.3.65
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.62"
+local VERSION="0.3.65"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -62,15 +62,38 @@ for i=0,9 do VK_TO_FKEY[0x60+i]="NumPad"..(({"Zero","One","Two","Three","Four","
 local SLOT_WIDGET={"Left","Top","Right","Bottom"}
 local BINDING_GROUPS={"Ability","Consumable"}
 
--- Presets are a Mod Menu editing aid only. Selecting one must not mutate
--- config.ini behind the menu transaction. The compatibility patch expands
--- presets in memory; only Apply writes the resulting values.
+-- Configuration is read at startup and after the menu commits Apply.
+-- The config manager owns initialization and migration of saved settings.
 local InitialText=readall(CONFIG_PATH) or ""
 local function load_config(text)
   local ini=parse_ini(text)
-  local c={Enabled=iv(ini,"General","Enabled",1),Preset=iv(ini,"General","Preset",1), HoldThresholdMs=iv(ini,"General","HoldThresholdMs",200),
-    ShowBothWheels=iv(ini,"General","ShowBothWheels",1),ConsumablesX=iv(ini,"Position Modifiers","ConsumablesX",40),ConsumablesY=iv(ini,"Position Modifiers","ConsumablesY",-420),AbilitiesX=iv(ini,"Position Modifiers","AbilitiesX",20),AbilitiesY=iv(ini,"Position Modifiers","AbilitiesY",40),SwapAbilitiesWithConsumables=iv(ini,"Position Modifiers","SwapAbilitiesWithConsumables",0)}
+  local c={Enabled=iv(ini,"General","Enabled",1),Preset=iv(ini,"General","Preset",1),
+    HoldThresholdMs=iv(ini,"General","HoldThresholdMs",200)}
   if c.HoldThresholdMs<50 then c.HoldThresholdMs=50 elseif c.HoldThresholdMs>1000 then c.HoldThresholdMs=1000 end
+  local displayed=iv(ini,"General","ShowWheels",nil)
+  c.ShowBothWheels=iv(ini,"General","ShowBothWheels",1)
+  if displayed==1 then c.ShowBothWheels=0 elseif displayed==2 then c.ShowBothWheels=1 end
+  local primary=iv(ini,"General","PrimaryWheel",nil)
+  c.PrimaryWheel=primary==1 and 1 or 0
+  -- Old offset labels represented the two positions. Explicit primary selection
+  -- owns the primary position; an obsolete swap cannot override that choice.
+  local px=iv(ini,"Position Modifiers","AbilitiesX",20)
+  local py=iv(ini,"Position Modifiers","AbilitiesY",40)
+  local sx=iv(ini,"Position Modifiers","ConsumablesX",40)
+  local sy=iv(ini,"Position Modifiers","ConsumablesY",-420)
+  if primary==nil and iv(ini,"Position Modifiers","SwapAbilitiesWithConsumables",0)==0 then
+    -- Without an explicit primary choice, preserve the actual legacy wheel
+    -- coordinates. This is an in-memory fallback, never a config rewrite.
+    px,sx=sx,px;py,sy=sy,py
+  end
+  c.PrimaryX=iv(ini,"More Options","PrimaryX",px)
+  c.PrimaryY=iv(ini,"More Options","PrimaryY",py)
+  c.SecondaryX=iv(ini,"More Options","SecondaryX",iv(ini,"More Options","ConsumablesX",sx))
+  c.SecondaryY=iv(ini,"More Options","SecondaryY",sy)
+  c.InteractionMode=iv(ini,"General","InteractionMode",0)==1 and 1 or 0
+  c.SecondaryWheelKey=iv(ini,"Bindings","SecondaryWheelKey",164)
+  c.SecondaryWheelMode=iv(ini,"Bindings","SecondaryWheelMode",2)==0 and 0 or 2
+  c.PrimaryWheelKey=iv(ini,"Bindings","PrimaryWheelKey",0)
   for _,group in ipairs(BINDING_GROUPS) do
     for slot=1,4 do
       local field=group..slot
@@ -83,6 +106,8 @@ end
 local LastConfigText=readall(CONFIG_PATH) or InitialText
 local PendingConfigBaseline
 local Config=load_config(LastConfigText)
+local InputRouting=dofile(scripts..'/wheel_routing.lua')()
+local refresh_selected_wheel
 local Enhanced
 local PersistentInput
 local Suppression
@@ -157,22 +182,27 @@ local SuppressionTargets={
   {action="IA_Combat_ToggleQuickslots",row="combat_toggle_quickslots"},
   {action="IA_OW_ToggleQuickslots",row="ow_toggle_quickslots"},
 }
-local function action_is_defined_here(action)
+local function action_is_defined_here(action,capture)
   if not valid(action) then return false end
   local name=fullname(action):match("([^%.:/%s]+)$")
-  for _,target in ipairs(SuppressionTargets) do if name==target.action then return true end end
+  for i,target in ipairs(SuppressionTargets) do
+    if name==target.action then return capture==false or i>4 or Config.InteractionMode==0 end
+  end
   return false
 end
 local function mapping_name_is_defined_here(n)
   local function normalize(value) return tostring(value or ""):lower():gsub("[%s_%-]","") end
   n=normalize(n)
-  for _,target in ipairs(SuppressionTargets) do
-    if (target.row and n==normalize(target.row)) or n==normalize(target.action) then return true end
+  for i,target in ipairs(SuppressionTargets) do
+    if (target.row and n==normalize(target.row)) or n==normalize(target.action) then
+      return i>4 or (Config and Config.InteractionMode==0)
+    end
   end
   return false
 end
 local SuppressionNeedsSnapshot=true
 local SuppressionDirty={}
+local SuppressionMode
 RequestSuppressionSnapshot=function(invalidate)
   SuppressionNeedsSnapshot=true
   if invalidate and Suppression then Suppression:Invalidate() end
@@ -182,8 +212,13 @@ local function remove_native_conflicts()
   if not Suppression then return false end
   if Config.Enabled==0 then
     local restored=Suppression:Restore()
-    SuppressionDirty={};SuppressionNeedsSnapshot=true
+    SuppressionDirty={};SuppressionNeedsSnapshot=true;SuppressionMode=nil
     return restored
+  end
+  local desiredMode=Config.InteractionMode==0 and 'independent' or 'native_slots'
+  if SuppressionMode~=desiredMode then
+    Suppression:Restore();Suppression:Invalidate()
+    SuppressionDirty={};SuppressionNeedsSnapshot=true;SuppressionMode=desiredMode
   end
   local contexts={}
   if SuppressionNeedsSnapshot then
@@ -201,7 +236,7 @@ end
 -- Dawnwalker keeps gameplay mapping contexts applied while Pause, Game Hub and
 -- dialogue own input. Bridge bindings attached directly to PawnInputComponent
 -- therefore need a game-specific acceptance gate here, not in the generic bridge.
-local InputGate={blockingWidgets={},dialogueActive=false,gameLayersVisible=nil}
+local InputGate={blockingWidgets={},dialogueActive=false,gameLayersVisible=nil,epoch=0}
 local report_input_gate
 local function object_path(o)
   if not valid(o) then return nil end
@@ -266,6 +301,11 @@ report_input_gate=function()
   local allowed=gameplay_input_allowed()
   if allowed==LastReportedInputGate then return end
   LastReportedInputGate=allowed
+  InputGate.epoch=(InputGate.epoch or 0)+1
+  if not allowed and InputRouting then
+    InputRouting:Reset()
+    if refresh_selected_wheel then ExecuteInGameThread(refresh_selected_wheel) end
+  end
   log(allowed and "Gameplay shortcut callbacks enabled."
       or ("Gameplay shortcut callbacks suppressed: "..input_gate_summary()))
 end
@@ -344,6 +384,7 @@ do
     if RecoveryWork then RecoveryWork:Invalidate() end
     if Enhanced then
       Enhanced.generation=Enhanced.generation+1
+      if InputRouting then InputRouting:Reset() end
       Enhanced.ready=false
       Enhanced.sub=nil; Enhanced.playerInput=nil; Enhanced.inputComponent=nil
     end
@@ -420,10 +461,25 @@ PersistentInput=dofile(scripts.."/persistent_input.lua")({
   key=function(vk) return VK_TO_FKEY[vk] end,
   each=function(c,fn) assert(each_container(c,function(i,v) fn(i,unwrap(v)) end),"Mapping access failed") end,
   bridge=function() return assert(bridge_api()) end,
+  delivery_fault=function(target,reason)
+    local ok,err=pcall(ExecuteInGameThread,function()
+      if PersistentInput.target~=target then return end
+      Enhanced.generation=Enhanced.generation+1;Enhanced.ready=false
+      InputRouting:Reset()
+      local closed,why=PersistentInput:Close()
+      if refresh_selected_wheel then refresh_selected_wheel() end
+      log('Input delivery stopped: '..tostring(reason)..(closed and '' or '; cleanup pending: '..tostring(why)))
+    end)
+    if not ok then log('Input delivery cleanup could not be queued: '..tostring(err)) end
+  end,
   initialize_identity=function(a)
     StaticFindObject("/Script/Engine.Default__KismetSystemLibrary"):Conv_ObjectToSoftObjectReference(a)
   end,
   trigger=function(a,mode,threshold)
+    -- 0 Tap Trigger and 1 Hold Trigger are discrete Enhanced Input actions.
+    -- 2 Hold Sustained has no trigger object: Started begins immediately and
+    -- Completed/Canceled ends the state through the bridge subscriptions.
+    if mode==2 then a.Triggers={};return end
     local className=mode==1 and "InputTriggerHold" or "InputTriggerTap"
     local t
     each_container(a.Triggers,function(_,v)
@@ -492,6 +548,7 @@ sync_inventory_context=function(overlay)
 end
 local function clear_bridge_bindings()
   Enhanced.generation=Enhanced.generation+1
+  if InputRouting then InputRouting:Reset() end
   local ok,closed,err=pcall(function() return PersistentInput:Close() end)
   if not ok or not closed then return false,tostring(ok and err or closed) end
   Enhanced.inputScope=nil
@@ -504,11 +561,19 @@ local function bind_bridge_actions(input,sub,defs)
   local bridge,bridgeErr=bridge_api()
   if not bridge then return false,bridgeErr end
   PersistentInput:Configure(Config)
+  if InputRouting then InputRouting:Configure(Config) end
+  if Config.InteractionMode==1 then
+    local momentary=Config.SecondaryWheelMode==2
+    defs[#defs+1]={field='SecondaryWheelKey',select='secondary',mode=Config.SecondaryWheelMode,momentary=momentary}
+    if not momentary then defs[#defs+1]={field='PrimaryWheelKey',select='primary'} end
+  end
   Enhanced.inputComponent=input
   Enhanced.inputComponentPath=object_path(input)
   local generation=Enhanced.generation
-  local function callback_for(binding)
+  local function callback_for(binding,phase)
+    local target=PersistentInput.target
     return function()
+      local gateEpoch=InputGate and InputGate.epoch
       -- Bridge callbacks run on the UE4SS update thread. Dawnwalker widget
       -- lookup, gameplay gating and BP_OnClicked dispatch must run on the
       -- Unreal game thread.
@@ -517,13 +582,21 @@ local function bind_bridge_actions(input,sub,defs)
           if generation~=Enhanced.generation then
             return
           end
+          if InputGate and gateEpoch~=InputGate.epoch then return end
           if not Enhanced.ready then
             return
           end
+          if PersistentInput.IsDeliveryValid and not PersistentInput:IsDeliveryValid(target) then return end
           if not action_input_allowed(binding) then
             return
           end
+          if InputRouting then
+            local dispatch,changed=InputRouting:Phase(binding,phase or 'Triggered')
+            if changed and refresh_selected_wheel then refresh_selected_wheel() end
+            if not dispatch then return end
+          end
           local dispatch=binding.group=="Ability" and trigger_ability or trigger_consumable
+          if PersistentInput.IsDeliveryValid and not PersistentInput:IsDeliveryValid(target) then return end
           local called,dispatched,detail=pcall(dispatch,binding.slot)
           if not called then
             log(binding.field.." dispatch exception: "..tostring(dispatched))
@@ -577,11 +650,9 @@ local function setup_enhanced_input()
   Enhanced.sub,Enhanced.playerInput,Enhanced.inputComponent=sub,pi,input
   Enhanced.inputComponentPath=object_path(input)
   local defs={}
-  for _,group in ipairs(BINDING_GROUPS) do
-    for slot=1,4 do
-      defs[#defs+1]={group=group,slot=slot,field=group..slot}
-    end
-  end
+  if Config.InteractionMode==0 then for _,group in ipairs(BINDING_GROUPS) do
+    for slot=1,4 do defs[#defs+1]={group=group,slot=slot,field=group..slot} end
+  end end
   -- The mod retains named actions; only subscriptions follow the input component.
   local bridgeBound,bindErr=bind_bridge_actions(input,sub,defs)
   if not bridgeBound then
@@ -671,6 +742,7 @@ local pathEnv={find=FindAllOf,valid=valid,path=object_path,resolve=native_action
 local RadialPaths=PathCache(pathEnv,"WBP_Combat_Focus_QuickslotBindingsRadial_C")
 local PromptPaths=PathCache(pathEnv,"WBP_HUD_Quickslots_ChangePrompt_C")
 local function connect_radial(radial)
+  if Config.InteractionMode~=0 then return true end
   local buttons={}
   for slot,direction in ipairs(SLOT_WIDGET) do
     local entity=safe(radial,direction)
@@ -710,19 +782,10 @@ local function hide_swap_prompt(hud,ability)
   return hidden
 end
 
--- Format order: 1 single, 2 consumables above, 3 abilities above.
+-- Primary selection owns the primary position in the two-wheel layout.
 local function desired_wheel_format()
   if Config.ShowBothWheels==0 then return 'single' end
-  return Config.SwapAbilitiesWithConsumables~=0 and 'abilities_above' or 'consumables_above'
-end
-local function wheel_offsets(format)
-  if format=='abilities_above' then
-    -- The labels describe the on-screen position, not a permanently-owned widget.
-    -- Once swapped, the Abilities controls own the Consumables widget position and
-    -- the Consumables controls own the Abilities widget position.
-    return Config.ConsumablesX,Config.ConsumablesY,Config.AbilitiesX,Config.AbilitiesY
-  end
-  return Config.AbilitiesX,Config.AbilitiesY,Config.ConsumablesX,Config.ConsumablesY
+  return Config.PrimaryWheel==1 and 'consumables_above' or 'abilities_above'
 end
 local function wheel_children_ready(ability,consumable)
   for _,entry in ipairs({{ability,{"WBP_AA_Quickslots_Bindings","Bindings","QuickslotBindingsRadial"}},
@@ -750,11 +813,31 @@ local function apply_wheel_format(h,format)
   local consumable=safe(h,'WBP_HUD_Quickslots')
   if not valid(switcher) or not valid(ability) or not valid(consumable) then return 'children_missing' end
   if not belongs(h,switcher) or not belongs(h,ability) or not belongs(h,consumable) then return end
-  local ax,ay,cx,cy=wheel_offsets(format)
-  local ok,err=WheelLayout:Update(h,switcher,ability,consumable,format~='single',ax,ay,cx,cy)
+  local primary=Config.PrimaryWheel==1 and ability or consumable
+  local secondary=Config.PrimaryWheel==1 and consumable or ability
+  local ok,err=WheelLayout:Update(h,switcher,ability,consumable,format~='single',primary,secondary,
+    Config.PrimaryX,Config.PrimaryY,Config.SecondaryX,Config.SecondaryY)
   if not ok then log('Wheel format failed: '..tostring(err));return end
-  if format~='single' then hide_swap_prompt(h,ability) end
+  if format~='single' then hide_swap_prompt(h,ability)
+  else
+    local group=(Config.InteractionMode or 0)~=0 and InputRouting.active or (Config.PrimaryWheel==1 and 'Ability' or 'Consumable')
+    local selected=group=='Ability' and ability or consumable
+    local selectedOK,selectError=WheelLayout:SelectWheel(switcher,selected)
+    if not selectedOK then log('Wheel selection failed: '..tostring(selectError));return end
+  end
   return true
+end
+refresh_selected_wheel=function()
+  if Config.Enabled==0 then return end
+  local h=ShortcutTargets:GetHUD()
+  if not valid(h) then return end
+  if Config.ShowBothWheels==0 then apply_wheel_format(h,'single');return end
+  local switcher=safe(h,'QuickslotsSwitcher')
+  local wheel=InputRouting.active=='Ability' and safe(h,'WBP_AA_Quickslots') or safe(h,'WBP_HUD_Quickslots')
+  if valid(switcher) and valid(wheel) then
+    local ok,err=WheelLayout:FocusWheel(switcher,wheel)
+    if not ok then log('Wheel focus failed: '..tostring(err)) end
+  end
 end
 local function setup_indicators(h)
   if not valid(h) then return end
@@ -763,6 +846,7 @@ local function setup_indicators(h)
   local consumable=safe(h,'WBP_HUD_Quickslots')
   if not wheel_children_ready(ability,consumable) then return 'children_missing' end
   if not Enhanced.ready then return end
+  if Config.InteractionMode~=0 then return NativeKeys:RestoreAll() end
   return override_icons(ability,consumable,false)==8
 end
 local function setup_hud(context,kind)
@@ -919,6 +1003,7 @@ local function update_hud_once()
   return true
 end
 reset_world_visuals=function()
+  if InputRouting then InputRouting:Reset() end
   -- Keep scalar indicator restoration records if the native HUD survives travel.
   IndicatorSetup:Invalidate();FormatSetup:Invalidate()
   ShortcutTargets:Invalidate()
@@ -975,6 +1060,12 @@ do
   if not okSuppressHook then log('Pre-activation suppression hook unavailable: '..tostring(suppressHookError)) end
   for _,name in ipairs({'AddMappingContext','RemoveMappingContext','ClearAllMappings'}) do
     recovery_hook('/Script/EnhancedInput.EnhancedInputSubsystemInterface:'..name,function()
+      if name~='AddMappingContext' and InputRouting then
+        ExecuteInGameThread(function()
+          InputRouting:Reset()
+          if refresh_selected_wheel then refresh_selected_wheel() end
+        end)
+      end
       if Config.Enabled~=0 then RecoveryWork:Request('input') end
     end)
   end
@@ -1020,11 +1111,15 @@ local function reconfigure_from_text(now)
   end
 
   Config=updated
+  if updated.InteractionMode~=previous.InteractionMode and IndicatorSetup then IndicatorSetup:Invalidate() end
   local inputChanged=retrying or updated.Enabled~=previous.Enabled or updated.HoldThresholdMs~=previous.HoldThresholdMs
   for _,group in ipairs(BINDING_GROUPS) do for slot=1,4 do
     local field=group..slot
     if updated[field]~=previous[field] or updated[field.."Mode"]~=previous[field.."Mode"] then inputChanged=true end
   end end
+  for _,field in ipairs({'PrimaryWheel','InteractionMode','SecondaryWheelKey','SecondaryWheelMode','PrimaryWheelKey'}) do
+    if updated[field]~=previous[field] then inputChanged=true end
+  end
   if inputChanged and RecoveryWork then RecoveryWork:Invalidate() end
   if inputChanged and Enhanced.ready then
     local closed=clear_bridge_bindings()
@@ -1036,7 +1131,7 @@ local function reconfigure_from_text(now)
     end
   end
   local formatChanged=retrying or updated.Enabled~=previous.Enabled
-  for _,field in ipairs({'ShowBothWheels','SwapAbilitiesWithConsumables','AbilitiesX','AbilitiesY','ConsumablesX','ConsumablesY'}) do
+  for _,field in ipairs({'ShowBothWheels','PrimaryWheel','InteractionMode','PrimaryX','PrimaryY','SecondaryX','SecondaryY'}) do
     if updated[field]~=previous[field] then formatChanged=true end
   end
   if formatChanged then FormatSetup:Invalidate() end

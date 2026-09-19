@@ -37,3 +37,12 @@ Optional local DMM integration check (requires a separately installed DMM; its s
 ```sh
 python tools/run-tests.py --lua lua5.4 --dmm-choices "path/to/DawnwalkerModMenu/Scripts/choices.lua"
 ```
+
+To also validate configuration migration against ModMenuDecorator 0.1.43 or newer:
+
+```sh
+python tools/run-tests.py --lua lua5.4 --dmm-choices "path/to/DawnwalkerModMenu/Scripts/choices.lua" --mmd-init-config "path/to/ModMenuDecorator/Scripts/init_config.lua"
+```
+
+This exercises legacy configurations, menu values and Apply using in-memory files;
+it never edits personal settings or starts the game.

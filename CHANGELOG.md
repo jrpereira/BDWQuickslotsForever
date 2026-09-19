@@ -2,6 +2,32 @@
 
 Use the latest release for current fixes. Historical releases retain the behavior and limitations described below.
 
+## 0.3.65
+
+- Replace the former three interaction choices with Independent and Selective.
+- Let Selective use the game's four native Quickslot bindings while the mod controls wheel focus.
+- Support a Secondary Wheel key as either Tap Trigger or Hold Sustained, returning to Primary on release.
+- Keep the configured Primary wheel in the native switcher and exchange switcher ownership when Selective changes focus.
+- Leave the native two-wheel hierarchy untouched when only one wheel is displayed.
+
+## 0.3.64
+
+- Make Primary Wheel the sole wheel-role selection; ignore obsolete positional swap when primary is explicit.
+- Read the edited One/Two display and primary/secondary position settings, keeping legacy configuration fallback.
+- Place position settings and the global threshold under More Options; align interaction labels with their input behavior.
+
+- Use one global Hold threshold for both wheels and preserve the existing configured value.
+- Remove wheel-specific threshold controls; obsolete configuration entries are ignored.
+
+## 0.3.63
+
+- Add Alt or Nothing, Tap Tap and Independent interaction modes with conditional controls.
+- Select the actual primary wheel.
+- Preserve existing shortcuts.
+- Cancel shared presses on wheel changes and stale queued input on menu/lifecycle changes.
+- Use canonical Deco metadata for tabs, header promotion, dynamic slot labels and fixed modes.
+- Require native delivery-fault protection for Alt and check modifier state before activation.
+
 ## 0.3.62
 
 - Remove development and migration tools from the installable ZIP.

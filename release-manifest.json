@@ -21,6 +21,7 @@
     "CHANGELOG.md": "CHANGELOG.md",
     "README.txt": "README.txt",
     "mod_settings.ini": "mod_settings.ini",
-    "config.example.ini": "distribution/config.ini"
+    "config.example.ini": "distribution/config.ini",
+    "Scripts/wheel_routing.lua": "Scripts/wheel_routing.lua"
   }
 }

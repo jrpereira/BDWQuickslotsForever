@@ -71,6 +71,17 @@ do
   assert(apply('legacy option'))
   assert(input==beforeInput and inventory==beforeInventory and suppress==beforeSuppress and hud==2,
     'ignored legacy option must not wake input, suppression or wheel formatting')
+  -- The global threshold affects input only; choosing primary also updates the HUD.
+  local threshold={};for k,v in pairs(legacy)do threshold[k]=v end
+  threshold.HoldThresholdMs=375
+  e.load_config=function()return threshold end;e.Enhanced.ready=true
+  local beforeCloses,beforeHUD=closes,hud
+  assert(apply('thresholds'))
+  assert(closes==beforeCloses+1 and input==beforeInput+1 and hud==beforeHUD)
+  local primary={};for k,v in pairs(threshold)do primary[k]=v end;primary.PrimaryWheel=1
+  e.load_config=function()return primary end;e.Enhanced.ready=true
+  assert(apply('primary'))
+  assert(closes==beforeCloses+2 and input==beforeInput+2 and hud==beforeHUD+1)
   -- A dirty failed Apply must also reconcile a user's reversion to the last text.
   local callback;local calls=0
   dofile('Scripts/config_notifications.lua')({subscribe=function(_,fn)callback=fn end,
