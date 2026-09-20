@@ -45,13 +45,12 @@ do
   local b=assert(source:find('local notificationOk,notificationError=',a,true))
   local old={Enabled=1,Ability1=49,ShowBothWheels=1}
   local new={Enabled=1,Ability1=50,ShowBothWheels=0}
-  local fail=true;local closes,input,hud,inventory,suppress=0,0,0,0,0
+  local fail=true;local closes,input,hud,inventory,gates=0,0,0,0,0
   local e=setmetatable({Config=old,LastConfigText='old',BINDING_GROUPS={'Ability','Consumable'},
     PersistentInput={Validate=function()return true end},Enhanced={ready=true},load_config=function(text)return text=='old' and old or new end,
     valid=function()return false end,live_subsystem=function()end,
     clear_bridge_bindings=function()closes=closes+1;return true end,
-    RequestSuppressionSnapshot=function()end,remove_native_conflicts=function()
-      suppress=suppress+1;return true end,
+    update_native_action_gates=function()gates=gates+1;return true end,
     FormatSetup={Invalidate=function()end},RecoveryWork={Invalidate=function()end,
       Request=function(_,name)assert(name=='hud');hud=hud+1 end},
     InventoryNavigation={Resume=function()inventory=inventory+1 end},
@@ -60,23 +59,35 @@ do
   assert(not pcall(apply,'new') and e.LastConfigText=='old' and e.PendingConfigBaseline==old)
   fail=false;assert(apply('new'))
   assert(e.LastConfigText=='new' and not e.PendingConfigBaseline and hud==1 and closes==1)
-  -- A visual-only change must not wake input, Inventory or suppression work.
-  local beforeInput,beforeInventory,beforeSuppress=input,inventory,suppress
+  -- A visual-only change must not wake input, Inventory or action-gate work.
+  local beforeInput,beforeInventory,beforeGates=input,inventory,gates
   local visual={};for k,v in pairs(new)do visual[k]=v end;visual.ShowBothWheels=1
   e.load_config=function()return visual end
   assert(apply('visual'))
-  assert(input==beforeInput and inventory==beforeInventory and suppress==beforeSuppress and hud==2)
+  assert(input==beforeInput and inventory==beforeInventory and gates==beforeGates and hud==2)
   local legacy={};for k,v in pairs(visual)do legacy[k]=v end
   legacy.RemoveDefinedActionBindings=0;e.load_config=function()return legacy end
   assert(apply('legacy option'))
-  assert(input==beforeInput and inventory==beforeInventory and suppress==beforeSuppress and hud==2,
-    'ignored legacy option must not wake input, suppression or wheel formatting')
+  assert(input==beforeInput and inventory==beforeInventory and gates==beforeGates and hud==2,
+    'ignored legacy option must not wake input, action gates or wheel formatting')
+  -- The global threshold affects input only; choosing primary also updates the HUD.
+  local threshold={};for k,v in pairs(legacy)do threshold[k]=v end
+  threshold.HoldThresholdMs=375
+  e.load_config=function()return threshold end;e.Enhanced.ready=true
+  local beforeCloses,beforeHUD=closes,hud
+  assert(apply('thresholds'))
+  assert(closes==beforeCloses+1 and input==beforeInput+1 and hud==beforeHUD)
+  local primary={};for k,v in pairs(threshold)do primary[k]=v end;primary.PrimaryWheel=1
+  e.load_config=function()return primary end;e.Enhanced.ready=true
+  assert(apply('primary'))
+  assert(closes==beforeCloses+2 and input==beforeInput+2 and hud==beforeHUD+1)
   -- A dirty failed Apply must also reconcile a user's reversion to the last text.
   local callback;local calls=0
   dofile('Scripts/config_notifications.lua')({subscribe=function(_,fn)callback=fn end,
     queue=function(fn)fn()end,read=function()return '[General]\n[Bindings]' end,
     current=function()return '[General]\n[Bindings]' end,dirty=function()return true end,
     apply=function()calls=calls+1;return true end,log=function()end})
-  callback();assert(calls==1,'dirty configuration must not be skipped on equal text')
+  callback({providerId='QuickslotsForever',revision=1,values={Enabled=1},changes={}})
+  assert(calls==1,'dirty configuration must not be skipped on equal text')
 end
 print('PASS audit regressions: independent retries, navigation cleanup, pending replacement, failed Apply recovery and scoped visual Apply')

@@ -3,12 +3,93 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import shutil
+import stat
 import subprocess
 import sys
 
 from deployment_preflight import compare, digest, safe_file
+
+
+PROTECTED_NAMES = {'config.ini', 'enabled.txt', '__folder_managed_by_vortex'}
+CONFIG_SUFFIXES = {'.ini', '.json', '.toml', '.cfg'}
+PUBLIC_CONFIGS = {'mod_settings.ini', 'config.example.ini'}
+
+
+def protected(relative):
+    name = PurePosixPath(relative).name.casefold()
+    return (name in PROTECTED_NAMES
+            or (PurePosixPath(name).suffix in CONFIG_SUFFIXES and name not in PUBLIC_CONFIGS))
+
+
+def validate_manifest(manifest):
+    if not isinstance(manifest, dict) or not isinstance(manifest.get('module'), str) or not manifest['module']:
+        raise ValueError('Manifest module is required')
+    if not isinstance(manifest.get('version'), str) or not manifest['version']:
+        raise ValueError('Manifest version is required')
+    entries = manifest.get('files')
+    if not isinstance(entries, dict) or not entries:
+        raise ValueError('Manifest files must be a non-empty object')
+    normalized = set()
+    for relative, expected in entries.items():
+        if not isinstance(relative, str) or not relative:
+            raise ValueError('Manifest path must be a non-empty string')
+        path = PurePosixPath(relative)
+        if path.as_posix() != relative or relative.strip() != relative:
+            raise ValueError('Manifest paths must use normalized relative POSIX form')
+        safe_file(Path('.'), relative)
+        folded = relative.casefold()
+        if folded in normalized:
+            raise ValueError('Case-insensitive payload path collision')
+        normalized.add(folded)
+        if folded == 'manifest.json':
+            raise ValueError('manifest.json is generated metadata, not a payload entry')
+        if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', expected):
+            raise ValueError('Manifest hashes must be SHA-256 hex strings')
+    return manifest
+
+
+def is_reparse(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, 'st_file_attributes', 0)
+                                              & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400))
+
+
+def checked_file(root, relative):
+    target = safe_file(root, relative)
+    anchor = root.resolve()
+    current = anchor
+    for part in PurePosixPath(relative).parts[:-1]:
+        current = current / part
+        if current.exists() and is_reparse(current):
+            raise ValueError('Manifest path traverses a reparse point: '+relative)
+    if target.exists() and is_reparse(target):
+        raise ValueError('Manifest file is a reparse point: '+relative)
+    return target
+
+
+def read_manifest(path):
+    try:
+        value = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError('Invalid installed manifest: '+str(error)) from error
+    return validate_manifest(value)
+
+
+def verify_managed_tree(manifest, deployed):
+    installed_path = checked_file(deployed, 'manifest.json')
+    installed = read_manifest(installed_path)
+    if installed != manifest:
+        raise RuntimeError('Installed manifest does not match staged candidate')
+    for relative, expected in manifest['files'].items():
+        if not protected(relative) and digest(checked_file(deployed, relative)) != expected.lower():
+            raise RuntimeError('Installed managed hash mismatch: '+relative)
+    return True
 
 
 def game_session():
@@ -28,18 +109,28 @@ def deploy(manifest, staged, deployed, records, session_provider=game_session):
     """Copy only verified manifest entries; preserve settings and enablement."""
     if session_provider():
         raise RuntimeError('Close the game before deployment, then repeat this command')
+    validate_manifest(manifest)
     entries = manifest['files']
-    if not entries:
-        raise ValueError('Empty payload')
-    if len({p.casefold() for p in entries}) != len(entries):
-        raise ValueError('Case-insensitive payload path collision')
     for relative, expected in entries.items():
-        name = Path(relative).name.lower()
-        if name == 'config.ini' or (name.endswith(('.ini', '.json', '.toml', '.cfg')) and name not in {'mod_settings.ini', 'config.example.ini'}):
-            raise ValueError('Personal settings cannot be deployment payload: '+relative)
-        if digest(safe_file(staged, relative)) != expected:
+        if digest(checked_file(staged, relative)) != expected.lower():
             raise ValueError('Staged hash mismatch: '+relative)
-        safe_file(deployed, relative)
+        checked_file(deployed, relative)
+    staged_manifest = checked_file(staged, 'manifest.json')
+    if read_manifest(staged_manifest) != manifest:
+        raise ValueError('Staged manifest content differs from deployment manifest')
+    installed_manifest = checked_file(deployed, 'manifest.json')
+    prior = read_manifest(installed_manifest) if installed_manifest.is_file() else None
+    obsolete = {}
+    if prior:
+        if prior['module'] != manifest['module']:
+            raise ValueError('Installed manifest belongs to a different module')
+        for relative, expected in prior['files'].items():
+            if relative not in entries and not protected(relative):
+                target = checked_file(deployed, relative)
+                if target.is_file():
+                    if digest(target) != expected.lower():
+                        raise RuntimeError('Obsolete managed file was modified locally: '+relative)
+                    obsolete[relative] = expected.lower()
     records = records.resolve()
     if records.is_relative_to(deployed.resolve()) or records.is_relative_to(staged.resolve()):
         raise ValueError('Keep deployment records outside payload roots')
@@ -59,22 +150,41 @@ def deploy(manifest, staged, deployed, records, session_provider=game_session):
                 if digest(target) != original[relative]:
                     raise RuntimeError('Backup verification failed: '+relative)
     state = {'module': manifest['module'], 'version': manifest['version'], 'before': original,
-             'payload': entries, 'changed': [], 'status': 'backed-up'}
+             'payload': entries, 'changed': [], 'removed': [], 'status': 'backed-up'}
     def record():
         (backup/'result.json').write_text(json.dumps(state, indent=2)+'\n', encoding='utf-8')
     record()
+    affected = {relative for relative in entries if not protected(relative)} | set(obsolete) | {'manifest.json'}
+    def rollback():
+        errors = []
+        for relative in sorted(affected):
+            try:
+                target = checked_file(deployed, relative)
+                if relative in original:
+                    source = checked_file(backup/'before', relative)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                    if digest(target) != original[relative]:
+                        raise RuntimeError('restored hash mismatch')
+                elif target.exists():
+                    if not target.is_file():
+                        raise RuntimeError('rollback target is not a file')
+                    target.unlink()
+            except Exception as rollback_error:
+                errors.append(relative+': '+str(rollback_error))
+        return errors
     try:
         for relative, expected in entries.items():
+            if protected(relative):
+                continue
+            expected = expected.lower()
             if session_provider():
                 raise RuntimeError('Game started during deployment; stop and review the recorded partial deployment')
-            target = safe_file(deployed, relative)
+            target = checked_file(deployed, relative)
             if digest(target) != original.get(relative):
                 raise RuntimeError('Concurrent destination change: '+relative)
-            # Enablement is user-owned, including an absent marker on fresh installs.
-            if relative == 'enabled.txt':
-                continue
             if digest(target) != expected:
-                source = safe_file(staged, relative)
+                source = checked_file(staged, relative)
                 if digest(source) != expected:
                     raise RuntimeError('Staged file changed during deployment: '+relative)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -82,16 +192,40 @@ def deploy(manifest, staged, deployed, records, session_provider=game_session):
                 state['changed'].append(relative)
             if digest(target) != expected:
                 raise RuntimeError('Installed hash mismatch: '+relative)
+        for relative, expected in obsolete.items():
+            if session_provider():
+                raise RuntimeError('Game started during deployment; stop and review the recorded partial deployment')
+            target = checked_file(deployed, relative)
+            if target.is_file():
+                if digest(target) != original.get(relative) or digest(target) != expected:
+                    raise RuntimeError('Concurrent obsolete-file change: '+relative)
+                target.unlink()
+                state['removed'].append(relative)
         for relative, expected in original.items():
-            if relative not in entries or relative == 'enabled.txt':
-                if digest(safe_file(deployed, relative)) != expected:
+            if relative not in affected:
+                if digest(checked_file(deployed, relative)) != expected:
                     raise RuntimeError('Preserved file changed: '+relative)
+        if session_provider():
+            raise RuntimeError('Game started during deployment; stop and review the recorded partial deployment')
+        if digest(installed_manifest) != original.get('manifest.json'):
+            raise RuntimeError('Concurrent installed manifest change')
+        installed_manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(staged_manifest, installed_manifest)
+        if digest(installed_manifest) != digest(staged_manifest):
+            raise RuntimeError('Installed manifest hash mismatch')
+        verify_managed_tree(manifest, deployed)
         state['status'] = 'deployed'
         record()
     except Exception as error:
+        rollback_errors = rollback()
         state['status'] = 'incomplete'
         state['error'] = str(error)
+        state['rollback'] = 'failed' if rollback_errors else 'complete'
+        if rollback_errors:
+            state['rollback_errors'] = rollback_errors
         record()
+        if rollback_errors:
+            raise RuntimeError(str(error)+'; rollback failed: '+'; '.join(rollback_errors)) from error
         raise
     return backup
 

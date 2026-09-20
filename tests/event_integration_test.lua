@@ -17,7 +17,7 @@ local e={VisualEpoch=0,Config={Enabled=1},Enhanced={ready=false},scripts='Script
   LoopAsync=function() error("Repeating timer forbidden") end,
   ExecuteWithDelay=function(ms,fn) delays[#delays+1]=fn end,
   NativeKeys={Prune=function() end},WheelLayout={RestoreAll=function() return true end},RadialPaths={Invalidate=function() end,Visit=function()end},PromptPaths={Invalidate=function() end},
-  remove_native_conflicts=function() cleanup=cleanup+1;return true end}
+  update_native_action_gates=function() cleanup=cleanup+1;return true end}
 e.enhanced_input_step=function()
   input=input+1;e.Enhanced.ready=true
   hooks['/Script/EnhancedInput.EnhancedInputSubsystemInterface:AddMappingContext']()
@@ -27,7 +27,7 @@ e.request_recovery=function() e.RecoveryWork:Request('input') end
 setmetatable(e,{__index=_G})
 assert(load(source:sub(a,b-1),'actual-maintenance','t',e))()
 local function tick() local job=table.remove(jobs,1);if job then job() end end
-tick();assert(input==1 and hud==1 and cleanup==0)
+tick();assert(input==1 and hud==1 and cleanup==1)
 for i=1,1000 do tick() end
 assert(input==1 and hud==1,'actual maintenance must remain idle')
 hooks['/Script/Engine.PlayerController:ClientRestart']();tick()

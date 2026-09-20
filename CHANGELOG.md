@@ -2,6 +2,55 @@
 
 Use the latest release for current fixes. Historical releases retain the behavior and limitations described below.
 
+## 0.3.69
+
+- Reacquire retained Enhanced Input contexts and actions before reusing invalid object proxies.
+- Initialize persistent action identity once per valid acquisition and validate its reflected library dependency.
+- Keep Direct groups before Selective in the settings hierarchy and retain unconditional access to both sections.
+
+## 0.3.68
+
+- Rename Independent interaction to Direct without changing its saved numeric value.
+- Gate native wheel Swap in both interaction modes.
+- Preserve the four native slot actions in Selective.
+
+## 0.3.67
+
+- Gate conflicting native Input Actions directly without modifying mappings or saved keys.
+- Restore directional Quickslot actions while the Inventory assignment overlay is active.
+- Remove mapping journals, Controls-remap transactions and context-mutation hooks.
+
+## 0.3.66
+
+- Add separate Size and Opacity controls for Primary and Secondary wheels.
+- Present Primary and Secondary visual controls in Level 4 subsections with concise field labels.
+
+## 0.3.65
+
+- Replace the former three interaction choices with Independent and Selective.
+- Let Selective use the game's four native Quickslot bindings while the mod controls wheel focus.
+- Support a Secondary Wheel key as either Tap Trigger or Hold Sustained, returning to Primary on release.
+- Keep the configured Primary wheel in the native switcher and exchange switcher ownership when Selective changes focus.
+- Leave the native two-wheel hierarchy untouched when only one wheel is displayed.
+
+## 0.3.64
+
+- Make Primary Wheel the sole wheel-role selection; ignore obsolete positional swap when primary is explicit.
+- Read the edited One/Two display and primary/secondary position settings, keeping legacy configuration fallback.
+- Place position settings and the global threshold under More Options; align interaction labels with their input behavior.
+
+- Use one global Hold threshold for both wheels and preserve the existing configured value.
+- Remove wheel-specific threshold controls; obsolete configuration entries are ignored.
+
+## 0.3.63
+
+- Add Alt or Nothing, Tap Tap and Independent interaction modes with conditional controls.
+- Select the actual primary wheel.
+- Preserve existing shortcuts.
+- Cancel shared presses on wheel changes and stale queued input on menu/lifecycle changes.
+- Use canonical Deco metadata for tabs, header promotion, dynamic slot labels and fixed modes.
+- Require native delivery-fault protection for Alt and check modifier state before activation.
+
 ## 0.3.62
 
 - Remove development and migration tools from the installable ZIP.
