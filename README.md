@@ -23,7 +23,7 @@ shortcut.
 - Choose Consumables or Abilities as your primary wheel and adjust both positions.
 - Adjust how long a press must last to count as Hold.
 
-In Independent mode, your shortcuts work regardless of which wheel is visible.
+In Direct mode, your shortcuts work regardless of which wheel is visible.
 
 ## Requirements
 
@@ -73,7 +73,7 @@ of the wheel. Your existing threshold is preserved when upgrading.
 
 ### Interaction
 
-- **Independent:** keep a dedicated shortcut for every ability and consumable.
+- **Direct:** keep a dedicated shortcut for every ability and consumable.
   Primary slots are numbered 1–4; secondary slots are numbered 5–8. Existing
   bindings stay attached to their abilities or consumables when you change primary.
 - **Selective:** use the four Quickslot keys configured in the game's Controls
@@ -81,7 +81,7 @@ of the wheel. Your existing threshold is preserved when upgrading.
   default: hold it to select Secondary, then release it to return to Primary.
   Choose **Tap** to use separate keys that select Secondary and Primary.
 
-Independent remains the default. Changing interaction modes preserves the keys
+Direct remains the default. Changing interaction modes preserves the keys
 and choices you saved for the other mode. A slot Hold is a discrete action after
 a charge-up. Selective Hold is sustained: it remains active exactly while the key
 is pressed and does not use the slot Hold threshold.
@@ -115,11 +115,11 @@ The **Primary Visuals** and **Secondary** subsections also control each wheel's
 size and opacity. Defaults are 100%/100% for Primary and 70%/80% for Secondary.
 
 Choose **One** to keep the native single-wheel layout. Selective changes which
-wheel is shown; Independent shortcuts continue to address either wheel directly.
+wheel is shown; Direct shortcuts continue to address either wheel directly.
 
-Conflicting original Quickslot and wheel-swap bindings are disabled automatically
-while the mod is enabled, so a press does not also trigger a conflicting original
-action. Disabling the mod
+Direct disables the four original Quickslot actions and native wheel Swap.
+Selective keeps those four native slot actions but also disables native wheel
+Swap, because its Primary and Secondary keys select the wheel deterministically. Disabling the mod
 restores the original bindings; your saved choices in the game's Controls menu
 are not edited.
 

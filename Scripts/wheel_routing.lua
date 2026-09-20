@@ -1,5 +1,5 @@
 -- Event-only wheel selection. Native Quickslot actions own slot activation in
--- Selective mode; Independent actions dispatch directly.
+-- Selective mode; Direct actions dispatch directly.
 return function()
   local MODE_HOLD_SUSTAINED=2
   local api={mode=0,primary='Consumable',active='Consumable'}

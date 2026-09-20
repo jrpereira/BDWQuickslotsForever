@@ -1,10 +1,10 @@
--- QuickslotsForever v0.3.66
+-- QuickslotsForever v0.3.69
 -- UE4SS Lua mod for The Blood of Dawnwalker.
 -- Gameplay objects are resolved lazily. A one-time activatable-widget snapshot
 -- seeds the input gate so reloading this mod inside an open menu is safe.
 
 local TAG="[QuickslotsForever]"
-local VERSION="0.3.66"
+local VERSION="0.3.69"
 
 local function log(s) print(TAG.." "..tostring(s).."\n") end
 local function op_valid(o) return o:IsValid() end
@@ -114,11 +114,11 @@ local InputRouting=dofile(scripts..'/wheel_routing.lua')()
 local refresh_selected_wheel
 local Enhanced
 local PersistentInput
-local Suppression
+local NativeActionGates
 local sync_inventory_context
 local InventoryNavigation
 local ShortcutTargets
-local RequestSuppressionSnapshot
+local set_inventory_action_gate
 local RecoveryWork
 local reset_world_visuals
 local function request_recovery()
@@ -177,64 +177,36 @@ ShortcutTargets=dofile(scripts..'/shortcut_targets.lua')({
   wheel=function(h,group) return safe(h,group=='Ability' and 'WBP_AA_Quickslots' or 'WBP_HUD_Quickslots') end,
   button=function(w,slot) return safe(w,SLOT_WIDGET[slot]) end,
 })
--- Explicit native-action suppression allowlist. Do not infer unverified aliases.
-local SuppressionTargets={
-  {action="IA_Quickslot_Left",row="player_quickslot_left"},
-  {action="IA_Quickslot_Top",row="player_quickslot_top"},
-  {action="IA_Quickslot_Right",row="player_quickslot_right"},
-  {action="IA_Quickslot_Bottom",row="player_quickslot_bottom"},
-  {action="IA_Combat_ToggleQuickslots",row="combat_toggle_quickslots"},
-  {action="IA_OW_ToggleQuickslots",row="ow_toggle_quickslots"},
+-- Explicit native-action gate allowlist. Do not infer unverified aliases.
+local NativeActionTargets={
+  "IA_Quickslot_Left",
+  "IA_Quickslot_Top",
+  "IA_Quickslot_Right",
+  "IA_Quickslot_Bottom",
+  "IA_Combat_ToggleQuickslots",
+  "IA_OW_ToggleQuickslots",
 }
-local function action_is_defined_here(action,capture)
+local InventoryActionGateOpen=false
+local function action_should_be_gated(action)
   if not valid(action) then return false end
   local name=fullname(action):match("([^%.:/%s]+)$")
-  for i,target in ipairs(SuppressionTargets) do
-    if name==target.action then return capture==false or i>4 or Config.InteractionMode==0 end
-  end
-  return false
-end
-local function mapping_name_is_defined_here(n)
-  local function normalize(value) return tostring(value or ""):lower():gsub("[%s_%-]","") end
-  n=normalize(n)
-  for i,target in ipairs(SuppressionTargets) do
-    if (target.row and n==normalize(target.row)) or n==normalize(target.action) then
-      return i>4 or (Config and Config.InteractionMode==0)
+  for i,target in ipairs(NativeActionTargets) do
+    if name==target then
+      if Config.Enabled==0 then return false end
+      if i<=4 then return Config.InteractionMode==0 and not InventoryActionGateOpen end
+      -- Wheel selection is settings-owned in both modes, so native Swap stays gated.
+      return true
     end
   end
   return false
 end
-local SuppressionNeedsSnapshot=true
-local SuppressionDirty={}
-local SuppressionMode
-RequestSuppressionSnapshot=function(invalidate)
-  SuppressionNeedsSnapshot=true
-  if invalidate and Suppression then Suppression:Invalidate() end
-  if RecoveryWork then RecoveryWork:Request('cleanup') end
-end
-local function remove_native_conflicts()
-  if not Suppression then return false end
-  if Config.Enabled==0 then
-    local restored=Suppression:Restore()
-    SuppressionDirty={};SuppressionNeedsSnapshot=true;SuppressionMode=nil
-    return restored
-  end
-  local desiredMode=Config.InteractionMode==0 and 'independent' or 'native_slots'
-  if SuppressionMode~=desiredMode then
-    Suppression:Restore();Suppression:Invalidate()
-    SuppressionDirty={};SuppressionNeedsSnapshot=true;SuppressionMode=desiredMode
-  end
-  local contexts={}
-  if SuppressionNeedsSnapshot then
-    if not Enhanced or not valid(Enhanced.playerInput) then return false end
-    assert(each_container(safe(Enhanced.playerInput,'AppliedInputContexts'),function(k)
-      local c=unwrap(k);if valid(c) then contexts[#contexts+1]=c end
-    end),'Active context access unavailable')
-  end
-  for _,c in pairs(SuppressionDirty) do if valid(c) then contexts[#contexts+1]=c end end
-  local done=Suppression:Apply(contexts)
-  if done then SuppressionNeedsSnapshot=false;SuppressionDirty={} end
-  return done
+local function loaded_input_actions()
+  local ok,all=pcall(function() return FindAllOf('InputAction') end)
+  local result={}
+  if ok and all then for _,action in ipairs(all) do
+    if valid(action) and not fullname(action):find('Default__',1,true) then result[#result+1]=action end
+  end end
+  return result
 end
 
 -- Dawnwalker keeps gameplay mapping contexts applied while Pause, Game Hub and
@@ -349,6 +321,10 @@ local function install_input_gate_hooks()
           log("Inventory context removal failed: "..tostring(err))
           if InventoryNavigation then InventoryNavigation:Resume() end
         end
+        if set_inventory_action_gate then
+          local gated,gateError=pcall(set_inventory_action_gate,false)
+          if not gated then log('Native action gate restoration failed: '..tostring(gateError)) end
+        end
       end
     end
   end,function() end)
@@ -378,10 +354,11 @@ do
       local ok,err=pcall(function() PersistentInput:CloseInventory();assert(PersistentInput:Close()) end)
       if not ok then log("Input detach before travel failed: "..tostring(err)) end
     end
-    if Suppression then
-      local ok,err=pcall(function() Suppression:Restore() end)
-      if not ok then log("Suppression restoration before travel failed: "..tostring(err)) end
+    if NativeActionGates then
+      local ok,err=pcall(function() NativeActionGates:RestoreAll() end)
+      if not ok then log("Native action restoration before travel failed: "..tostring(err)) end
     end
+    InventoryActionGateOpen=false
     InputGate.blockingWidgets={}
     InputGate.dialogueActive=false
     InputGate.gameLayersVisible=nil
@@ -477,7 +454,9 @@ PersistentInput=dofile(scripts.."/persistent_input.lua")({
     if not ok then log('Input delivery cleanup could not be queued: '..tostring(err)) end
   end,
   initialize_identity=function(a)
-    StaticFindObject("/Script/Engine.Default__KismetSystemLibrary"):Conv_ObjectToSoftObjectReference(a)
+    local library=StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+    assert(valid(library),'KismetSystemLibrary unavailable for persistent action identity')
+    library:Conv_ObjectToSoftObjectReference(a)
   end,
   trigger=function(a,mode,threshold)
     -- 0 Tap Trigger and 1 Hold Trigger are discrete Enhanced Input actions.
@@ -509,45 +488,64 @@ PersistentInput=dofile(scripts.."/persistent_input.lua")({
     return found
   end,
 })
-local function suppression_mapping_signature(mapping)
-  local parts={}
-  for _,field in ipairs({'Triggers','Modifiers'}) do
-    local items={}
-    each_container(safe(mapping,field),function(i,v)
-      items[#items+1]={index=i,path=object_path(unwrap(v)) or ''}
-    end)
-    table.sort(items,function(a,b) return a.index<b.index end)
-    parts[#parts+1]=field
-    for _,item in ipairs(items) do parts[#parts+1]=item.path end
-  end
-  parts[#parts+1]=object_path(safe(mapping,'PlayerMappableKeySettings')) or ''
-  return table.concat(parts,'|')
+local function rebuild_actions(actions)
+  if not Enhanced or not valid(Enhanced.playerInput) then return true end
+  local changed={}
+  for _,action in ipairs(actions) do changed[object_path(action)]=true end
+  local contexts={}
+  assert(each_container(safe(Enhanced.playerInput,'AppliedInputContexts'),function(k)
+    local context=unwrap(k)
+    if valid(context) then
+      each_container(safe(context,'Mappings'),function(_,mapping)
+        mapping=unwrap(mapping)
+        local action=unwrap(safe(mapping,'Action'))
+        if valid(action) and changed[object_path(action)] then contexts[object_path(context)]=context end
+      end)
+    end
+  end),'Active context access unavailable')
+  local lib=StaticFindObject('/Script/EnhancedInput.Default__EnhancedInputLibrary')
+  assert(valid(lib),'EnhancedInputLibrary unavailable')
+  for _,context in pairs(contexts) do lib:RequestRebuildControlMappingsUsingContext(context,false) end
+  return true
 end
-Suppression=dofile(scripts.."/runtime_suppression.lua")({
-  signature=suppression_mapping_signature,
-  valid=valid,path=object_path,resolve=native_action,name=FName,target=action_is_defined_here,
-  key=function(m) return fname_string(m.Key.KeyName) end,
-  each=function(c,fn) assert(each_container(c,function(i,v) fn(i,unwrap(v)) end),"Mapping access failed") end,
-  owned=function(c)
-    -- Native assets live under /Game; preserve all transient mod contexts,
-    -- including native-action inventory mappings.
-    return PersistentInput:Owns(c) or not (object_path(c) or ""):match("^/Game/")
+NativeActionGates=dofile(scripts..'/action_gates.lua')({
+  marker='QSF_NativeActionGate',valid=valid,path=object_path,unwrap=unwrap,
+  same=function(a,b) return valid(a) and valid(b) and fullname(a)==fullname(b) end,
+  each=function(c,fn) assert(each_container(c,fn),'Trigger access unavailable') end,
+  actions=loaded_input_actions,target=action_should_be_gated,
+  retain_dummy=function()
+    local action=retained_input_object('InputAction','IA_QSF_NativeActionGate')
+    action.Triggers={}
+    return action
   end,
-  load=function() return ModRef:GetSharedVariable("QuickslotsForever.SuppressionFields.v1") end,
-  save=function(s) ModRef:SetSharedVariable("QuickslotsForever.SuppressionFields.v1",s) end,
-  rebuild=function(c)
-    local lib=StaticFindObject("/Script/EnhancedInput.Default__EnhancedInputLibrary")
-    assert(valid(lib),"EnhancedInputLibrary unavailable")
-    lib:RequestRebuildControlMappingsUsingContext(c,false)
+  construct=function(owner,name)
+    return StaticConstructObject(assert(cls('/Script/EnhancedInput.InputTriggerChordAction')),owner,FName(name),0x40)
   end,
+  chord=function(trigger) return unwrap(safe(trigger,'ChordAction')) end,
+  set_chord=function(trigger,action) trigger.ChordAction=action end,
+  set_triggers=function(action,triggers) action.Triggers=triggers end,
+  rebuild=rebuild_actions,
 })
+local function update_native_action_gates()
+  return NativeActionGates:Update()
+end
+set_inventory_action_gate=function(open)
+  open=open==true
+  if InventoryActionGateOpen==open then return true end
+  InventoryActionGateOpen=open
+  return update_native_action_gates()
+end
 sync_inventory_context=function(overlay)
   if Config.Enabled==0 or not valid(overlay) then return true end
   local sub=valid(Enhanced.sub) and Enhanced.sub or live_subsystem()
   if not valid(sub) then return false end
   if not PersistentInput:AttachInventory(overlay,sub) then return false end
-  if overlay:IsActivated() then return PersistentInput:OpenInventory(overlay,sub) end
+  if overlay:IsActivated() then
+    if not set_inventory_action_gate(true) then return false end
+    return PersistentInput:OpenInventory(overlay,sub)
+  end
   PersistentInput:DeactivateInventory() -- guarded: no removal when already absent
+  set_inventory_action_gate(false)
   return true
 end
 local function clear_bridge_bindings()
@@ -649,7 +647,6 @@ local function setup_enhanced_input()
   PersistentInput:Validate(Config)
   local cleared,clearErr=clear_bridge_bindings()
   if not cleared then log("Enhanced Input: "..tostring(clearErr)); return false end
-  SuppressionNeedsSnapshot=true
   Enhanced.controller,Enhanced.pawn=pc,pawn
   Enhanced.sub,Enhanced.playerInput,Enhanced.inputComponent=sub,pi,input
   Enhanced.inputComponentPath=object_path(input)
@@ -663,7 +660,7 @@ local function setup_enhanced_input()
     log("Enhanced Input helper binding failed: "..tostring(bindErr))
     return false
   end
-  remove_native_conflicts(nil,nil)
+  update_native_action_gates()
   Enhanced.gameplayContextSignature=gameplay_context_signature(pi)
   Enhanced.ready=true
   if RecoveryWork then
@@ -699,7 +696,11 @@ local function enhanced_input_step()
             local closed=clear_bridge_bindings()
             if closed then Enhanced.ready=false else return false end
           else
-            PersistentInput:EnsureGameplay(Enhanced.sub)
+            if not PersistentInput:EnsureGameplay(Enhanced.sub) then
+              log("Enhanced Input lifecycle invalidated: gameplay context expired; rebuilding helper scope.")
+              local closed=clear_bridge_bindings()
+              if closed then Enhanced.ready=false else return false end
+            end
           end
         end
         if not Enhanced.ready then return setup_enhanced_input() end
@@ -710,8 +711,7 @@ local function enhanced_input_step()
   return Config.Enabled==0 or Enhanced.ready
 end
 
--- Runtime suppression is applied to active native contexts after lifecycle events.
--- Controls row appearance is separate; saved user bindings remain untouched.
+-- Native actions are gated directly; mappings and saved user bindings remain untouched.
 
 -- HUD positioning and native key-icon display; no replacement keycap widgets.
 local function parent(w) if not valid(w) then return nil end local ok,p=pcall(function() return w:GetParent() end); return ok and valid(p) and p or nil end
@@ -965,7 +965,10 @@ InventoryNavigation=dofile(scripts..'/inventory_navigation.lua')({
     return (object_path(o) or ''):find('/Engine/Transient',1,true)~=nil
   end) end,
   prepare=sync_inventory_context,
-  deactivate=function() PersistentInput:DeactivateInventory() end,
+  deactivate=function()
+    PersistentInput:DeactivateInventory()
+    set_inventory_action_gate(false)
+  end,
 })
 local function snapshot_inventory_navigation()
   ExecuteInGameThread(function()
@@ -1025,7 +1028,7 @@ RecoveryWork=dofile(scripts.."/event_work.lua")({
   run=function(name)
     if name=='input' then return enhanced_input_step() end
     if name=='hud' then return Config.Enabled==0 or update_hud_once() end
-    if name=='cleanup' then return remove_native_conflicts(nil,nil) end
+    if name=='cleanup' then return update_native_action_gates() end
   end,
 })
 local function recovery_hook(path,callback)
@@ -1036,33 +1039,6 @@ do
   recovery_hook('/Script/Engine.PlayerController:ClientRestart',request_recovery)
   recovery_hook('/Script/Engine.PlayerController:ClientRetryClientRestart',request_recovery)
   recovery_hook('/Script/Engine.Controller:OnRep_Pawn',request_recovery)
-  local remapOK,remapError=pcall(RegisterHook,
-    '/Script/RebelInput.RebelInputMappingSubsystem:ApplyPendingKeyboardMappings',
-    function()
-      if Config.Enabled==0 then return end
-      local ok,err=pcall(function() Suppression:Restore() end)
-      if not ok then log('Native binding restoration before Controls update failed: '..tostring(err)) end
-    end,
-    function() RequestSuppressionSnapshot(true) end)
-  if not remapOK then log('Controls remap hook unavailable: '..tostring(remapError)) end
-  -- Suppress a newly applied native context before it enters the active set.
-  -- RequestRebuildControlMappingsUsingContext never calls AddMappingContext.
-  local okSuppressHook,suppressHookError=pcall(RegisterHook,
-    '/Script/EnhancedInput.EnhancedInputSubsystemInterface:AddMappingContext',
-    function(_,mappingContext)
-      if Config.Enabled==0 or not Suppression then return end
-      local context=unwrap(mappingContext)
-      if valid(context) and (object_path(context) or ''):match('^/Game/') then
-        Suppression:Invalidate(context)
-        local ok,err=pcall(function() Suppression:Apply({context}) end)
-        if not ok then
-          SuppressionDirty[object_path(context)]=context
-          if RecoveryWork then RecoveryWork:Request('cleanup') end
-          log('Context suppression failed: '..tostring(err))
-        end
-      end
-    end,function() end)
-  if not okSuppressHook then log('Pre-activation suppression hook unavailable: '..tostring(suppressHookError)) end
   for _,name in ipairs({'AddMappingContext','RemoveMappingContext','ClearAllMappings'}) do
     recovery_hook('/Script/EnhancedInput.EnhancedInputSubsystemInterface:'..name,function()
       if name~='AddMappingContext' and InputRouting then
@@ -1072,6 +1048,7 @@ do
         end)
       end
       if Config.Enabled~=0 then RecoveryWork:Request('input') end
+      RecoveryWork:Request('cleanup')
     end)
   end
   for _,class in ipairs({'/Script/Engine.PlayerController','/Script/EnhancedInput.EnhancedInputLocalPlayerSubsystem',
@@ -1079,8 +1056,11 @@ do
       '/Script/EnhancedInput.InputMappingContext'}) do
     local ok,err=pcall(NotifyOnNewObject,class,function(o)
       if not valid(o) or fullname(o):find('Default__',1,true) then return end
-      if class=='/Script/EnhancedInput.InputAction' or class=='/Script/EnhancedInput.InputMappingContext' then
+      if class=='/Script/EnhancedInput.InputAction' then
+        RecoveryWork:Request('cleanup')
         if Enhanced.ready then return end
+      elseif class=='/Script/EnhancedInput.InputMappingContext' and Enhanced.ready then
+        return
       end
       request_recovery()
     end)
@@ -1088,6 +1068,7 @@ do
   end
   request_recovery()
   RecoveryWork:Request('hud')
+  RecoveryWork:Request('cleanup')
 end
 
 -- Mod Menu Apply owns configuration changes. Subscribe once; master toggles
@@ -1110,7 +1091,8 @@ local function reconfigure_from_text(now)
     if not clear_bridge_bindings() then return false end
     Enhanced.ready=false
     PersistentInput:CloseInventory()
-    Suppression:Restore()
+    NativeActionGates:RestoreAll()
+    InventoryActionGateOpen=false
     if RecoveryWork then RecoveryWork:Invalidate() end
     reset_world_visuals()
   end
@@ -1144,9 +1126,8 @@ local function reconfigure_from_text(now)
   if updated.Enabled~=previous.Enabled and updated.Enabled~=0 then snapshot_inventory_navigation()
   elseif inputChanged and InventoryNavigation then InventoryNavigation:Resume() end
   if inputChanged then request_recovery() end
-  if retrying then
-    RequestSuppressionSnapshot(true)
-    assert(remove_native_conflicts()~=false,'Suppression update pending')
+  if retrying or updated.Enabled~=previous.Enabled or updated.InteractionMode~=previous.InteractionMode then
+    assert(update_native_action_gates()~=false,'Native action gate update pending')
   end
   if formatChanged and Config.Enabled~=0 then RecoveryWork:Request('hud') end
   LastConfigText=now
@@ -1155,7 +1136,7 @@ local function reconfigure_from_text(now)
   return true
 end
 local notificationOk,notificationError=pcall(function()
-  local api=dofile(scripts.."/dmm_api.lua")
+  local api=dofile(scripts.."/settings_api.lua")
   dofile(scripts.."/config_notifications.lua")({
     subscribe=api.subscribe,queue=ExecuteInGameThread,log=log,
     read=function() return readall(CONFIG_PATH) end,
@@ -1164,5 +1145,5 @@ local notificationOk,notificationError=pcall(function()
     apply=reconfigure_from_text,
   })
 end)
-if not notificationOk then log("DMM Apply subscription unavailable: "..tostring(notificationError)) end
+if not notificationOk then log("Settings Apply subscription unavailable: "..tostring(notificationError)) end
 log("Loaded v"..VERSION..(Config.Enabled~=0 and ". Auto-initialization is deferred until the local player/HUD are live." or ". Disabled in Mod Menu; gameplay/HUD initialization skipped."))

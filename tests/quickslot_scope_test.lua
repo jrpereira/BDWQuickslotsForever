@@ -12,7 +12,12 @@ for value in metadata:gmatch('DecoType%s*=%s*([^\r\n]+)') do
   assert(value=='tab' or value=='keybind','unsupported canonical DecoType')
   if value=='tab' then tabs=tabs+1 else keys=keys+1 end
 end
-assert(tabs==3 and keys==19,'three tab controls and Independent/Selective inputs remain decorated')
+assert(tabs==3 and keys==19,'three tab controls and Direct/Selective inputs remain decorated')
+local parents={}
+for value in metadata:gmatch('DecoParent%s*=%s*([^\r\n]+)') do parents[value]=(parents[value] or 0)+1 end
+local parentKinds=0;for _ in pairs(parents)do parentKinds=parentKinds+1 end
+assert(parentKinds==2 and parents['Interaction: Direct']==2 and parents['Interaction: Selective']==1,
+  'persistent interaction headings must contain the existing subgroups')
 for value in metadata:gmatch('DecoLevel%s*=%s*([^\r\n]+)') do
   local n=tonumber(value);assert(n and n%1==0 and n>=0 and n<=6,'font level must be numeric 0..6')
 end
@@ -57,7 +62,7 @@ local e=setmetatable({PersistentInput={Validate=function()return true end},Enhan
     for i,d in ipairs(defs)do assert(d.field==expected[2*i-1])end
     definitions=#defs;state.actions=defs;return true
   end,
-  remove_native_conflicts=function()cleanup=cleanup+1 end,
+  update_native_action_gates=function()cleanup=cleanup+1 end,
   gameplay_context_signature=function()return 'OW' end,
   sync_blocking_widgets_once=function()end,log=function()end}, {__index=_G})
 local a=assert(source:find('local function setup_enhanced_input()',1,true))

@@ -32,17 +32,6 @@ and workspace notes are excluded. No game files or Dawnwalker Mod Menu source ar
 - [ModMenuDecorator](https://github.com/jrpereira/BDWModMenuDecorator)
 - [UE4SSLuaEventBridge](https://github.com/jrpereira/UE4SSLuaEventBridge)
 
-Optional local DMM integration check (requires a separately installed DMM; its source is not bundled or required by CI):
-
-```sh
-python tools/run-tests.py --lua lua5.4 --dmm-choices "path/to/DawnwalkerModMenu/Scripts/choices.lua"
-```
-
-To also validate configuration migration against ModMenuDecorator 0.1.43 or newer:
-
-```sh
-python tools/run-tests.py --lua lua5.4 --dmm-choices "path/to/DawnwalkerModMenu/Scripts/choices.lua" --mmd-init-config "path/to/ModMenuDecorator/Scripts/init_config.lua"
-```
-
-This exercises legacy configurations, menu values and Apply using in-memory files;
-it never edits personal settings or starts the game.
+QuickslotsForever tests exercise the vendored public settings-notification client.
+Mod-menu parsing, migration and durable Apply behavior are tested by ModMenuDecorator,
+which owns those implementation details.

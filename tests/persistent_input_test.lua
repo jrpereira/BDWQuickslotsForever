@@ -1,4 +1,4 @@
-local objects,constructed,active,bindings={},0,{},{}
+local objects,constructed,active,bindings,identities={},0,{},{},0
 local function object(name)
  local o={name=name,valid=true,Mappings={},Triggers={}}
  function o:UnmapAll() self.Mappings={} end
@@ -18,9 +18,9 @@ for _,d in ipairs({'Left','Top','Right','Bottom'}) do native[d]=object('IA_Quick
 local api=dofile('Scripts/persistent_input.lua')({
  valid=valid,path=function(o)return o.name end,resolve=function(p)return objects[p]end,
  same=function(a,b)return a==b end,name=function(s)return s end,key=function(k)return k end,
- retain=function(_,name) if objects[name] then return objects[name] end;constructed=constructed+1;return object(name) end,
+ retain=function(_,name) if valid(objects[name]) then return objects[name] end;constructed=constructed+1;return object(name) end,
  each=function(t,fn)for i,v in ipairs(t)do fn(i,v)end end,
- bridge=function()return bridge end,initialize_identity=function()end,
+ bridge=function()return bridge end,initialize_identity=function(a)assert(valid(a));identities=identities+1 end,
  trigger=function(a,m,t)a.mode=m;a.threshold=t end,
  native_action=function(d)return native[d]end,present=function(c)return active[c]~=nil end,
 })
@@ -28,10 +28,11 @@ local config={HoldThresholdMs=200};local defs={}
 for _,g in ipairs({'Ability','Consumable'})do for i=1,4 do
  local f=g..i;config[f]='Key'..i;config[f..'Mode']=i%2;defs[#defs+1]={field=f}
 end end
-api:Configure(config);assert(constructed==9 and #api.contexts.gameplay.Mappings==8)
+api:Configure(config);assert(constructed==9 and identities==8 and #api.contexts.gameplay.Mappings==8)
 local original=api.actions.Ability1
 local called=0
 assert(api:Bind(object('input'),sub,defs,function()return function()called=called+1 end end))
+assert(identities==8,'binding an acquired action must not repeat identity reflection')
 assert(active[api.contexts.gameplay]==10000)
 bindings.IA_AbilitySlot1();assert(called==1)
 closeFail=true;assert(not api:Close() and api.target==5 and active[api.contexts.gameplay])
@@ -97,3 +98,21 @@ for primary=0,1 do
  assert(api.contexts.gameplay.Mappings[1].Key.KeyName=='Restored')
 end
 print('PASS global threshold ignores obsolete values and survives primary changes with stable bindings/actions')
+
+-- Invalid retained proxies are reacquired before any reflected configuration call.
+local staleContext=api.contexts.gameplay
+local staleAction=api.actions.Ability2
+staleContext.valid=false;staleAction.valid=false
+assert(api:EnsureGameplay(sub)==false,'invalid gameplay context must request lifecycle reconstruction')
+local beforeConstructed,beforeIdentities=constructed,identities
+api:Configure(config)
+assert(valid(api.contexts.gameplay) and api.contexts.gameplay~=staleContext)
+assert(valid(api.actions.Ability2) and api.actions.Ability2~=staleAction)
+assert(constructed==beforeConstructed+2 and identities==beforeIdentities+1,
+ 'only a reacquired action initializes identity')
+api:Configure(config)
+assert(constructed==beforeConstructed+2 and identities==beforeIdentities+1,
+ 'stable retained objects perform no reconstruction or identity reflection')
+local staleInventory=api.contexts.inventory;staleInventory.valid=false
+assert(api:PrepareInventory() and valid(api.contexts.inventory) and api.contexts.inventory~=staleInventory)
+print('PASS stale retained contexts/actions are reacquired and identity initializes once per acquisition')

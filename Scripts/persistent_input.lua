@@ -14,11 +14,19 @@ return function(e)
     end
   end
   local function objects(plan)
-    if not api.contexts.gameplay then api.contexts.gameplay=e.retain('InputMappingContext','IMC_QuickslotsForever') end
-    for _,p in ipairs(plan) do if not api.actions[p.field] then
-      local name=p.group and ('IA_'..p.group..'Slot'..p.slot) or ('IA_QuickslotsForever_'..p.field)
-      api.actions[p.field]=e.retain('InputAction',name)
-    end end
+    if not e.valid(api.contexts.gameplay) then
+      api.contexts.gameplay=e.retain('InputMappingContext','IMC_QuickslotsForever')
+      assert(e.valid(api.contexts.gameplay),'Persistent gameplay context unavailable')
+    end
+    for _,p in ipairs(plan) do
+      if not e.valid(api.actions[p.field]) then
+        local name=p.group and ('IA_'..p.group..'Slot'..p.slot) or ('IA_QuickslotsForever_'..p.field)
+        local action=e.retain('InputAction',name)
+        assert(e.valid(action),'Persistent action unavailable: '..p.field)
+        api.actions[p.field]=action
+        e.initialize_identity(action)
+      end
+    end
   end
   function api:Owns(context)
     for _,c in pairs(self.contexts) do if e.same(c,context) then return true end end
@@ -82,7 +90,7 @@ return function(e)
       self.target=nil
       self.deliveryGuard=false
     end
-    if e.valid(self.sub) and self.contexts.gameplay then self.sub:RemoveMappingContext(self.contexts.gameplay,options) end
+    if e.valid(self.sub) and e.valid(self.contexts.gameplay) then self.sub:RemoveMappingContext(self.contexts.gameplay,options) end
     self.sub=nil
     return true
   end
@@ -110,7 +118,7 @@ return function(e)
     end
     for _,entry in ipairs(defs) do
       local action=assert(self.actions[entry.field],'Persistent action missing')
-      e.initialize_identity(action)
+      assert(e.valid(action),'Persistent action invalid: '..entry.field)
       local phases=entry.momentary and {'Started','Completed','Canceled'} or {'Triggered'}
       for _,phase in ipairs(phases) do
         local handle,why=bridge.BindAction(target,e.path(action),phase,callback(entry,phase))
@@ -121,16 +129,21 @@ return function(e)
     return true
   end
   function api:EnsureGameplay(sub)
+    if not e.valid(self.contexts.gameplay) then return false end
     if not e.present(self.contexts.gameplay) then sub:AddMappingContext(self.contexts.gameplay,10000,options) end
+    return true
   end
   function api:PrepareInventory()
-    if self.inventoryReady then return true end
+    if self.inventoryReady and e.valid(self.contexts.inventory) then return true end
+    self.inventoryReady=false
     local actions={}
     for slot,direction in ipairs({'Left','Top','Right','Bottom'}) do
       actions[slot]=e.native_action(direction)
       if not e.valid(actions[slot]) then return false end
     end
-    local c=self.contexts.inventory or e.retain('InputMappingContext','IMC_QuickslotsForever_Inventory')
+    local c=e.valid(self.contexts.inventory) and self.contexts.inventory
+        or e.retain('InputMappingContext','IMC_QuickslotsForever_Inventory')
+    assert(e.valid(c),'Persistent inventory context unavailable')
     self.contexts.inventory=c
     c:UnmapAll()
     local numbers={'One','Two','Three','Four'}

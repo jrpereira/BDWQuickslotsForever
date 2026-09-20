@@ -2,6 +2,24 @@
 
 Use the latest release for current fixes. Historical releases retain the behavior and limitations described below.
 
+## 0.3.69
+
+- Reacquire retained Enhanced Input contexts and actions before reusing invalid object proxies.
+- Initialize persistent action identity once per valid acquisition and validate its reflected library dependency.
+- Keep Direct groups before Selective in the settings hierarchy and retain unconditional access to both sections.
+
+## 0.3.68
+
+- Rename Independent interaction to Direct without changing its saved numeric value.
+- Gate native wheel Swap in both interaction modes.
+- Preserve the four native slot actions in Selective.
+
+## 0.3.67
+
+- Gate conflicting native Input Actions directly without modifying mappings or saved keys.
+- Restore directional Quickslot actions while the Inventory assignment overlay is active.
+- Remove mapping journals, Controls-remap transactions and context-mutation hooks.
+
 ## 0.3.66
 
 - Add separate Size and Opacity controls for Primary and Secondary wheels.

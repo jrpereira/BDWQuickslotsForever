@@ -136,9 +136,3 @@ for _,abilityFirst in ipairs({false,true}) do
   assert(f.layout:RestoreAll() and f.s:GetChildAt(f.s:GetActiveWidgetIndex())==native)
 end
 print('PASS primary selection changes the native active wheel, skips identical writes and restores native selection')
-
-if not arg[1] then
-  print("PASS: wheel layout behavioral tests; external DMM parser/model contract not supplied")
-  return
-end
-dofile('tests/dmm_metadata_integration.lua')

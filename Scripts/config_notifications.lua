@@ -1,7 +1,9 @@
 -- DMM owns Apply/external-edit handling. No timers or filesystem monitoring here.
 return function(e)
   local pending=false
-  return e.subscribe('QuickslotsForever',function()
+  return e.subscribe('QuickslotsForever',function(event)
+    assert(type(event)=='table' and event.providerId=='QuickslotsForever','invalid settings event')
+    assert(type(event.revision)=='number' and type(event.values)=='table' and type(event.changes)=='table','incomplete settings event')
     if pending then return end
     pending=true
     local ok,err=pcall(e.queue,function()
